@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-import os
 import argparse
 import glob
-from typing import List, Tuple
+import os
+import sys
 
-def collect_mp4_files(base_directory: str) -> List[List[str]]:
+def collect_mp4_files(base_directory: str) -> list[list[str]]:
     """
     Collects MP4 files from subdirectories named 'cameraX' within a base directory,
     and returns them as a sorted list of lists of MP4 file paths.
@@ -14,13 +14,13 @@ def collect_mp4_files(base_directory: str) -> List[List[str]]:
         base_directory (str): The root directory to search within.
 
     Returns:
-        List[List[str]]: A list where each inner list contains full paths to MP4 files
+        list[list[str]]: A list where each inner list contains full paths to MP4 files
                          found in a 'cameraX' subdirectory, sorted alphabetically.
                          The outer list is ordered by camera number (e.g., camera1's files first,
                          then camera2's files, and so on).
     """
     # List to store tuples of (camera_number, camera_name, full_path_to_dir) for sorting
-    camera_dirs_info: List[Tuple[int, str, str]] = []
+    camera_dirs_info: list[tuple[int, str, str]] = []
 
     # Check if the base directory exists
     if not os.path.isdir(base_directory):
@@ -41,45 +41,45 @@ def collect_mp4_files(base_directory: str) -> List[List[str]]:
     # Sort the camera directories by their numerical suffix
     camera_dirs_info.sort(key=lambda x: x[0])
 
-    # List to store the final result: an array of arrays (List[List[str]])
-    all_camera_mp4s: List[List[str]] = []
+    if len(camera_dirs_info) != 4:
+        print("Could not find 4 camera directories.")
+        sys.exit(1)
+
+    # List to store the final result: an array of arrays (list[list[str]])
+    all_camera_mp4s: list[list[str]] = []
 
     # Process each sorted camera directory
     for camera_num, camera_name, camera_path in camera_dirs_info:
         # Find all .mp4 files within this camera directory
-        mp4_files: List[str] = glob.glob(os.path.join(camera_path, "*.[Mm][Oo][Vv]"))
+        mp4_files: list[str] = glob.glob(os.path.join(camera_path, "*.[Mm][Pp]4"))
         # Sort the files alphabetically for consistent order
-        sorted_mp4_files: List[str] = sorted(mp4_files)
+        sorted_mp4_files: list[str] = sorted(mp4_files)
+        if len(sorted_mp4_files) == 0:
+            print(f"No video files found in {camera_path}.")
+            sys.exit(1)
         all_camera_mp4s.append(sorted_mp4_files)
 
     return all_camera_mp4s
 
 
-def construct_ffmpeg_args(files: List[List[str]], one_audio: bool, output: str, encode: str = "YouTube") -> str:
+def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, output: str, encode: str = "YouTube") -> str:
+
     cmd: str = "ffmpeg \\\n"
 
     """
-    ffmpeg wants the input files as a series of -i <filename>
-    arguments.  To perform an offset to sync the video requires
-    a -itsoffset argument.
-
-    TODO: For now it prints an offset of 0.0 on cameras 2, 3, 4,
-          and the user must edit the resulting CLI line.  This
-          needs to be configurable somehow.
+    ffmpeg wants the input files as a series of -i <filename> arguments.
     """
-    first = True
-    for cam_list in files:
-        if not first:
-            cmd += '-itsoffset 0.0 '
-        first = False
+    for n, cam_list in enumerate(files):
+        # Add -i for each file in the current list
         for f in cam_list:
             cmd += f'-i {f} '
+    
         cmd += '\\\n'
 
     """
     Construct a filter_complex filter that will combine the video.
     """
-    cmd += '-filter_complex \\\n'
+    cmd += '-filter_complex " \\\n'
 
     """
     Construct a concat for each camera that combines the multiple
@@ -89,34 +89,39 @@ def construct_ffmpeg_args(files: List[List[str]], one_audio: bool, output: str, 
     TODO: If there is only one file a concat won't work and is unnecessary.
           Need to add handling for that case.
     """
-    cmd += '    "'
-    cam = 0
-    n = 0
-    first = True
-    for cam_list in files:
-        if not first:
+    video = 0
+    for cam, cam_list in enumerate(files):
+        # If there are multiple videos we must concatinate them together.
+        if len(cam_list) > 1:
+            # To avoid incrementing videos twice, increment a throwaway the first time.
+            index = video
+            for f in cam_list:
+                cmd += f'[{index},v]'
+                index += 1
+            cmd += f'concat=n={len(cam_list)}:v=1:a=0[v{cam}_concat]; \\\n'
             cmd += '     '
-        first = False
-        video = n
-        for f in cam_list:
-            cmd += f'[{video},v]'
-            video += 1
-        cmd += f'concat=n={len(cam_list)}:v=1:a=0[v{cam}_concat]; \\\n'
-        cmd += '     '
-        video = n
-        for f in cam_list:
-            cmd += f'[{video},a]'
-            video += 1
-        n = video
-        cmd += f'concat=n={len(cam_list)}:v=0:a=1[a{cam}_concat]; \\\n'
-        cam += 1
+
+            for f in cam_list:
+                cmd += f'[{video},a]'
+                video += 1
+            cmd += f'concat=n={len(cam_list)}:v=0:a=1[a{cam}_concat]; \\\n'
 
     """
+    PTS-STARTPTS calculates the new timestamp for each frame by subtracting the initial
+    timestamp from its current timestamp. This effectively resets the video's timeline
+    to start at t=0, which is crucial for ensuring that streams align correctly, especially
+    after concatenating multiple clips.
+
+    This is also used to adjust the delay between the two cameras, note that although
+    the previous code made all the delays positive, this code needs them as negative!
+
+    TODO: This hard codes 30fps as an output, probably should be CLI option.
     """
-    cam = 0
-    for cam_list in files:
-        cmd += f'     [v{cam}_concat]scale=1920x1080,setpts=PTS-STARTPTS[scaled{cam}]; \\\n'
-        cam += 1
+    for cam, cam_file_list in enumerate(files):
+        if len(cam_file_list) > 1:
+            cmd += f'     [v{cam}_concat]fps=fps=30,scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
+        else:
+            cmd += f'     [{cam},v]fps=fps=30,scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
 
     """
     Process the audio portion, here there are two choices.
@@ -133,15 +138,14 @@ def construct_ffmpeg_args(files: List[List[str]], one_audio: bool, output: str, 
         TODO: The user should be able to specify the volume adjustments at the 
               CLI or in a config file.
         """
-        cam = 0
-        for cam_list in files:
-            cmd += f'     [a{cam}_concat]volume=1.0[a{cam}_adj]; \\\n';
-            cam += 1
-        cam = 0
+        for cam, cam_list in enumerate(files):
+            if len(cam_file_list) > 1:
+                cmd += f'     [a{cam}_concat]volume=1.0[a{cam}_adj]; \\\n';
+            else:
+                cmd += f'     [{cam},a]volume=1.0[a{cam}_adj]; \\\n';
         cmd += '     '
-        for cam_list in files:
+        for cam, cam_list in enumerate(files):
             cmd += f'[a{cam}_adj]'
-            cam += 1
         cmd += f'amix=inputs={len(files)}:duration=longest:dropout_transition=2[aud_mix]; \\\n';
 
     """
@@ -172,10 +176,8 @@ def construct_ffmpeg_args(files: List[List[str]], one_audio: bool, output: str, 
         """
         All 4 audio streams individually.
         """
-        cam = 0
-        first = True
-        for cam_list in files:
-            if not first:
+        for cam, cam_list in files:
+            if cam > 0:
                 cmd += ' '
             first = False
             cmd += f'-map "[a{cam}_adj]"'
@@ -213,6 +215,10 @@ def construct_ffmpeg_args(files: List[List[str]], one_audio: bool, output: str, 
         """
         cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 -movflags faststart \\\n'
         cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
+    elif encode == 'H265':
+        cmd += '-c:v libx265 -preset veryfast -crf 28 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" \\\n'
+        cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
+
     else:
         cmd += '-c:v libx264 -preset veryfast -crf 29 -qp 10 -profile:v main -vf format=yuv420p \\\n'
         cmd += '-c:a aac -b:a 192k \\\n'
@@ -225,15 +231,74 @@ def construct_ffmpeg_args(files: List[List[str]], one_audio: bool, output: str, 
     return cmd
 
 
+def compute_offsets(frames: list[int]) -> tuple[float, float, float, float]:
+    if len(frames) != 6:
+        print("Wrong number of frame arguments.")
+        sys.exit(1)
+
+    # Compute deltas between videos, camera1 is at offset 0.0 by convention, so:
+    cam2 = frames[1] - frames[0]  # camera2 is this offset from camera1
+    cam3 = frames[3] - frames[2]  # camera3 is this offset from camera2
+    cam4 = frames[5] - frames[4]  # camera4 is this offset from camera3
+
+    cam1cam2 = cam2
+    cam1cam3 = cam2 + cam3
+    cam1cam4 = cam2 + cam3 + cam4
+
+    smallest = min(cam1cam2, cam1cam3, cam1cam4)
+    base = 0.0
+    # If one or more times was negative, shift them all so one is zero and the rest
+    # are positive.
+    if smallest < 0:
+        base -= smallest
+        cam1cam2 -= smallest
+        cam1cam3 -= smallest
+        cam1cam4 -= smallest
+
+    return (base / 60.0, cam1cam2 / 60.0, cam1cam3 / 60.0, cam1cam4 / 60.0)
+
 if __name__ == "__main__":
+    my_name = os.path.basename(sys.argv[0])
+
     # Set up argument parser
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
-        description="Collects MP4 file paths from 'cameraX' subdirectories."
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="""\
+Process multiple 1080P video files into a 4K 4x4 matrix.
+
+Takes an input directory tree like this:
+
+    /path/to/directory/camera1/
+    /path/to/directory/camera2/
+    /path/to/directory/camera3/
+    /path/to/directory/camera4/
+
+Each directory should contain one or more 1080P input movie files,
+typically copied straight off the camera.
+
+The user then needs to use other software to find frames that are
+in sync between the videos, for example:
+
+   camera1 frame 67 is in sync with camera2 frame 102
+   camera2 frame 87 is in sync with camera3 frame 95
+   camera3 frame 124 is in sync with camera4 frame 87
+
+If the frames are omitted they are all treated as zero.
+""",
+        epilog=f"Example: {my_name} /path/to/directory 67 102 87 95 124 87",
     )
     parser.add_argument(
         "directory",
         type=str,
         help="The base directory to search for 'cameraX' subdirectories."
+    )
+    # Argument for the four frame integers
+    parser.add_argument(
+        "frame",
+        type=int,
+        nargs="*",
+        default=[0, 0, 0, 0, 0, 0],
+        help="Six integers representing cam1 cam2 cam2 cam3 cam3 cam4"
     )
 
     # Parse command-line arguments
@@ -242,16 +307,18 @@ if __name__ == "__main__":
 
     if len(input_directory) == 0:
         print("No input directory given.")
-        os.exit(1)
+        sys.exit(1)
 
     if not os.path.exists(input_directory):
         print(f"Directory {input_directory} does not exist.")
-        os.exit(1)
+        sys.exit(1)
+
+    offsets = compute_offsets(args.frame)
 
     # Call the function to collect files
-    # The return type is now List[List[str]]
-    all_camera_mp4s: List[List[str]] = collect_mp4_files(input_directory)
+    # The return type is now list[list[str]]
+    all_camera_mp4s: list[list[str]] = collect_mp4_files(input_directory)
 
     if all_camera_mp4s:
-        command = construct_ffmpeg_args(all_camera_mp4s, True, input_directory + "/combined.mp4")
+        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory + "/combined.mp4")
         print(command)

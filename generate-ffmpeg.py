@@ -95,12 +95,13 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         if len(cam_list) > 1:
             # To avoid incrementing videos twice, increment a throwaway the first time.
             index = video
+            cmd += '     '
             for f in cam_list:
                 cmd += f'[{index},v]'
                 index += 1
             cmd += f'concat=n={len(cam_list)}:v=1:a=0[v{cam}_concat]; \\\n'
-            cmd += '     '
 
+            cmd += '     '
             for f in cam_list:
                 cmd += f'[{video},a]'
                 video += 1
@@ -114,14 +115,12 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
 
     This is also used to adjust the delay between the two cameras, note that although
     the previous code made all the delays positive, this code needs them as negative!
-
-    TODO: This hard codes 30fps as an output, probably should be CLI option.
     """
     for cam, cam_file_list in enumerate(files):
         if len(cam_file_list) > 1:
-            cmd += f'     [v{cam}_concat]fps=fps=30,scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
+            cmd += f'     [v{cam}_concat]scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
         else:
-            cmd += f'     [{cam},v]fps=fps=30,scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
+            cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
 
     """
     Process the audio portion, here there are two choices.
@@ -140,9 +139,9 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         """
         for cam, cam_list in enumerate(files):
             if len(cam_file_list) > 1:
-                cmd += f'     [a{cam}_concat]volume=1.0[a{cam}_adj]; \\\n';
+                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}[a{cam}_adj]; \\\n';
             else:
-                cmd += f'     [{cam},a]volume=1.0[a{cam}_adj]; \\\n';
+                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}[a{cam}_adj]; \\\n';
         cmd += '     '
         for cam, cam_list in enumerate(files):
             cmd += f'[a{cam}_adj]'
@@ -157,7 +156,8 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     """
     cmd += '     [scaled0][scaled1]hstack[top]; \\\n'
     cmd += '     [scaled2][scaled3]hstack[bottom]; \\\n'
-    cmd += '     [top][bottom]vstack[outv]" \\\n'
+    cmd += '     [top][bottom]vstack[matrix]; \\\n'
+    cmd += '     [matrix]fps=fps=30[outv]" \\\n'
 
     """
     Send the final video to the output.

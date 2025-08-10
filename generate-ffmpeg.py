@@ -157,7 +157,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     cmd += '     [scaled0][scaled1]hstack[top]; \\\n'
     cmd += '     [scaled2][scaled3]hstack[bottom]; \\\n'
     cmd += '     [top][bottom]vstack[matrix]; \\\n'
-    cmd += '     [matrix]fps=fps=30[outv];" \\\n'
+    cmd += '     [matrix]fps=fps=60[outv];" \\\n'
 
     """
     Send the final video to the output.

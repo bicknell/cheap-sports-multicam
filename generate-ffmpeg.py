@@ -139,9 +139,9 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         """
         for cam, cam_list in enumerate(files):
             if len(cam_file_list) > 1:
-                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}[a{cam}_adj]; \\\n';
+                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[a{cam}_adj]; \\\n';
             else:
-                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}[a{cam}_adj]; \\\n';
+                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[a{cam}_adj]; \\\n';
         cmd += '     '
         for cam, cam_list in enumerate(files):
             cmd += f'[a{cam}_adj]'
@@ -157,7 +157,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     cmd += '     [scaled0][scaled1]hstack[top]; \\\n'
     cmd += '     [scaled2][scaled3]hstack[bottom]; \\\n'
     cmd += '     [top][bottom]vstack[matrix]; \\\n'
-    cmd += '     [matrix]fps=fps=30[outv]" \\\n'
+    cmd += '     [matrix]fps=fps=30[outv];" \\\n'
 
     """
     Send the final video to the output.

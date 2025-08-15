@@ -4,6 +4,36 @@ import argparse
 import glob
 import os
 import sys
+from typing import Dict, Optional
+
+metadata: Dict[str, Optional[str]] = {
+    "album": None,               # name of the set this work belongs to
+    "album_artist": None,        # main creator of the set/album, if different from artist.
+                                # e.g. "Various Artists" for compilation albums.
+    "artist": "Loudoun 25-26 2012G Silver",              # main creator of the work
+    "comment": None,             # any additional description of the file.
+    "composer": None,            # who composed the work, if different from artist.
+    "copyright": None,           # name of copyright holder.
+    "creation_time": None,       # date when the file was created, preferably in ISO 8601.
+    "date": "2025-08-13",        # date when the work was created, preferably in ISO 8601.
+    "disc": None,                # number of a subset, e.g. disc in a multi-disc collection.
+    "encoder": None,             # name/settings of the software/hardware that produced the file.
+    "encoded_by": "Leo Bicknell",# person/group who created the file.
+    "filename": None,            # original name of the file.
+    "genre": None,               # <self-evident>.
+    "language": None,            # main language in which the work is performed, preferably
+                                 # in ISO 639-2 format. Multiple languages can be specified by
+                                 # separating them with commas.
+    "performer": None,           # artist who performed the work, if different from artist.
+                                 # E.g for "Also sprach Zarathustra", artist would be "Richard
+                                 # Strauss" and performer "London Philharmonic Orchestra".
+    "publisher": None,           # name of the label/publisher.
+    "service_name": None,        # name of the service in broadcasting (channel name).
+    "service_provider": None,    # name of the service provider in broadcasting.
+    "title": "Loudoun 2012G Silver Practice",               # name of the work.
+    "track": None,               # number of this work in the set, can be in form current/total.
+    "variant_bitrate": None,     # the total bitrate of the bitrate variant that the current stream is part of
+}
 
 def collect_mp4_files(base_directory: str) -> list[list[str]]:
     """
@@ -62,7 +92,7 @@ def collect_mp4_files(base_directory: str) -> list[list[str]]:
     return all_camera_mp4s
 
 
-def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, output: str, encode: str = "YouTube") -> str:
+def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, output: str, encode: str = "H265") -> str:
 
     cmd: str = "ffmpeg \\\n"
 
@@ -216,12 +246,23 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 -movflags faststart \\\n'
         cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
     elif encode == 'H265':
-        cmd += '-c:v libx265 -preset veryfast -crf 28 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" \\\n'
+        cmd += '-c:v libx265 -preset fast -crf 28 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
         cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
 
     else:
         cmd += '-c:v libx264 -preset veryfast -crf 29 -qp 10 -profile:v main -vf format=yuv420p \\\n'
         cmd += '-c:a aac -b:a 192k \\\n'
+
+    """
+    Set Metadata
+    """
+
+    space = ""
+    for k, v in metadata.items():
+        if v is not None:
+            cmd += f'{space}-metadata {k}="{v}"'
+            space = " "
+    cmd += "\\\n"
 
     """
     Set the output file name.

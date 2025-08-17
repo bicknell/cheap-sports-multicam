@@ -3,37 +3,56 @@
 import argparse
 import glob
 import os
+import yaml
 import sys
 from typing import Dict, Optional
 
-metadata: Dict[str, Optional[str]] = {
-    "album": None,               # name of the set this work belongs to
-    "album_artist": None,        # main creator of the set/album, if different from artist.
-                                # e.g. "Various Artists" for compilation albums.
-    "artist": "Loudoun 25-26 2012G Silver",              # main creator of the work
-    "comment": None,             # any additional description of the file.
-    "composer": None,            # who composed the work, if different from artist.
-    "copyright": None,           # name of copyright holder.
-    "creation_time": None,       # date when the file was created, preferably in ISO 8601.
-    "date": "2025-08-13",        # date when the work was created, preferably in ISO 8601.
-    "disc": None,                # number of a subset, e.g. disc in a multi-disc collection.
-    "encoder": None,             # name/settings of the software/hardware that produced the file.
-    "encoded_by": "Leo Bicknell",# person/group who created the file.
-    "filename": None,            # original name of the file.
-    "genre": None,               # <self-evident>.
-    "language": None,            # main language in which the work is performed, preferably
-                                 # in ISO 639-2 format. Multiple languages can be specified by
-                                 # separating them with commas.
-    "performer": None,           # artist who performed the work, if different from artist.
-                                 # E.g for "Also sprach Zarathustra", artist would be "Richard
-                                 # Strauss" and performer "London Philharmonic Orchestra".
-    "publisher": None,           # name of the label/publisher.
-    "service_name": None,        # name of the service in broadcasting (channel name).
-    "service_provider": None,    # name of the service provider in broadcasting.
-    "title": "Loudoun 2012G Silver Practice",               # name of the work.
-    "track": None,               # number of this work in the set, can be in form current/total.
-    "variant_bitrate": None,     # the total bitrate of the bitrate variant that the current stream is part of
-}
+def load_metadata(directory_path: str) -> Dict[str, str]:
+    """
+    Looks for a 'metadata.yaml' file in the specified directory.
+
+    If the file exists, it loads the YAML content into a dictionary and
+    returns it. If the file does not exist, it returns an empty dictionary.
+
+    Args:
+        directory_path (str): The path to the directory to search.
+
+    Returns:
+        Dict[str, str]: A dictionary containing the metadata from the file,
+                        or an empty dictionary if the file is not found.
+    """
+    # Construct the full path to the metadata.yaml file
+    file_path: str = os.path.join(directory_path, 'metadata.yaml')
+
+    # Check if the file exists at the constructed path
+    if os.path.exists(file_path):
+        try:
+            # Open and load the YAML file
+            with open(file_path, 'r', encoding='utf-8') as file:
+                # Use safe_load for security reasons
+                metadata_dict = yaml.safe_load(file)
+            
+            # Ensure the loaded data is a dictionary. If it's not, return an empty one.
+            if isinstance(metadata_dict, dict):
+                # The user requested a dictionary of string to string.
+                # We can perform a check to ensure all keys and values are strings.
+                # If they are not, we will log a warning and return the dictionary as is,
+                # or a filtered dictionary to best match the type hint.
+                # For this simple function, we'll assume the YAML content is correctly formatted.
+                for key, value in metadata_dict.items():
+                    if not isinstance(key, str) or not isinstance(value, str):
+                        print(f"Error: 'metadata.yaml' entry {key} with value {value} is not a string to string.")
+                        return {}
+                return metadata_dict
+            else:
+                print("Warning: 'metadata.yaml' content is not a dictionary. Returning empty dictionary.")
+
+        except yaml.YAMLError as e:
+            # Handle potential YAML parsing errors
+            print(f"Error parsing YAML file at '{file_path}': {e}")
+
+    # Any error drops through to an empty dictionary.
+    return {}
 
 def collect_mp4_files(base_directory: str) -> list[list[str]]:
     """
@@ -92,7 +111,7 @@ def collect_mp4_files(base_directory: str) -> list[list[str]]:
     return all_camera_mp4s
 
 
-def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, output: str, encode: str = "H265") -> str:
+def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, output: str, encode: str, metadata: Dict[str, str]) -> str:
 
     cmd: str = "ffmpeg \\\n"
 
@@ -216,7 +235,12 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
 
 
     """
-    How to encode the final video and audio:
+    Generate output parameters
+    """
+    if encode == 'YouTube':
+        """
+        I asked gemini.google.com for the best settings for uploading to YouTube.
+
         - -c:v libx264, aka H.264/MPEG-4 AVC
         - -preset veryfast
            - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
@@ -236,17 +260,32 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         - Move the moov atom to the start of the file to allow immediate playback when streaming
         - -c:a aac, aka AAC-LC
         - -b:a, set audio bitrate to 192kbps
-
-    TODO: Add more presets for different use cases.
-    """
-    if encode == 'YouTube':
-        """
-        I asked gemini.google.com for the best settings for uploading to YouTube.
         """
         cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 -movflags faststart \\\n'
         cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
     elif encode == 'H265':
-        cmd += '-c:v libx265 -preset fast -crf 28 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
+        """
+        - -c:v libx265, aka H.265/HEVC
+        - -preset fast
+           - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+           - Controls encoding speed, and resulting output file size.  Tweak down
+             on faster / hardware accelerated computers.
+        - -crf 20, aka Constant Rate Factor
+           - 18-28 is generally acceptable.
+           - Smaller values == larger files and more "quality"
+        - H.264 Profile "main"
+           - Other options: baseline, main, high, high10, high442, high444
+        - B-frames between i/p-frames
+           - 4 for this codec
+        - x265-params
+           - fast-intra=1 Helps reduce encoding time, works better for streaming
+           - no-open-gop=1 Improves compatability
+           - refs=4 Look at 4 frames before and 4 frames after for encoding.
+        - Move the moov atom to the start of the file to allow immediate playback when streaming
+        - -c:a aac, aka AAC-LC
+        - -b:a, set audio bitrate to 192kbps
+        """
+        cmd += '-c:v libx265 -preset fast -crf 20 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
         cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
 
     else:
@@ -257,11 +296,9 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     Set Metadata
     """
 
-    space = ""
     for k, v in metadata.items():
-        if v is not None:
-            cmd += f'{space}-metadata {k}="{v}"'
-            space = " "
+        if v is not None and v != '':
+            cmd += f'-metadata {k}="{v}" '
     cmd += "\\\n"
 
     """
@@ -359,7 +396,8 @@ If the frames are omitted they are all treated as zero.
     # Call the function to collect files
     # The return type is now list[list[str]]
     all_camera_mp4s: list[list[str]] = collect_mp4_files(input_directory)
+    metadata = load_metadata(input_directory)
 
     if all_camera_mp4s:
-        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory + "/combined.mp4")
+        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory + "/combined.mp4", "H265", metadata)
         print(command)

@@ -129,6 +129,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     Construct a filter_complex filter that will combine the video.
     """
     cmd += '-filter_complex " \\\n'
+    cmd += '     color=c=black:s=3840x2160:d=10[bg]; \\\n';
 
     """
     Construct a concat for each camera that combines the multiple
@@ -138,24 +139,34 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     TODO: If there is only one file a concat won't work and is unnecessary.
           Need to add handling for that case.
     """
-    video = 0
+    videoidx = 0
     for cam, cam_list in enumerate(files):
-        # If there are multiple videos we must concatinate them together.
         if len(cam_list) > 1:
-            # To avoid incrementing videos twice, increment a throwaway the first time.
-            index = video
-            cmd += '     '
-            for f in cam_list:
-                cmd += f'[{index},v]'
-                index += 1
+            streamidx = videoidx
+            for video in cam_list:
+                cmd += f'     [{streamidx}:v]setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[v{streamidx}_adj]; \\\n'
+                streamidx += 1
+            cmd += f'     '
+            streamidx = videoidx
+            for video in cam_list:
+                cmd += f'[v{streamidx}_adj]'
+                streamidx += 1
             cmd += f'concat=n={len(cam_list)}:v=1:a=0[v{cam}_concat]; \\\n'
 
-            cmd += '     '
-            for f in cam_list:
-                cmd += f'[{video},a]'
-                video += 1
+            streamidx = videoidx
+            for video in cam_list:
+                cmd += f'     [{streamidx}:a]asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{streamidx}_adj]; \\\n'
+                streamidx += 1
+
+            cmd += f'     '
+            streamidx = videoidx
+            for video in cam_list:
+                cmd += f'[a{streamidx}_adj]'
+                streamidx += 1
             cmd += f'concat=n={len(cam_list)}:v=0:a=1[a{cam}_concat]; \\\n'
 
+            videoidx = streamidx
+            
     """
     PTS-STARTPTS calculates the new timestamp for each frame by subtracting the initial
     timestamp from its current timestamp. This effectively resets the video's timeline
@@ -167,9 +178,9 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     """
     for cam, cam_file_list in enumerate(files):
         if len(cam_file_list) > 1:
-            cmd += f'     [v{cam}_concat]scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
+            cmd += f'     [v{cam}_concat]scale=1920x1080[scaled{cam}]; \\\n'
         else:
-            cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
+            cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
 
     """
     Process the audio portion, here there are two choices.
@@ -188,12 +199,12 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         """
         for cam, cam_list in enumerate(files):
             if len(cam_file_list) > 1:
-                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[a{cam}_adj]; \\\n';
+                cmd += f'     [a{cam}_concat]volume=1.0[a{cam}_level]; \\\n';
             else:
-                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[a{cam}_adj]; \\\n';
+                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_level]; \\\n';
         cmd += '     '
         for cam, cam_list in enumerate(files):
-            cmd += f'[a{cam}_adj]'
+            cmd += f'[a{cam}_level]'
         cmd += f'amix=inputs={len(files)}:duration=longest:dropout_transition=2[aud_mix]; \\\n';
 
     """
@@ -203,9 +214,14 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     Stack the second two cameras left to right.
     Stack the two stacks vertically.
     """
-    cmd += '     [scaled0][scaled1]hstack[top]; \\\n'
-    cmd += '     [scaled2][scaled3]hstack[bottom]; \\\n'
-    cmd += '     [top][bottom]vstack[matrix]; \\\n'
+#    cmd += '     [scaled0][scaled1]hstack[top]; \\\n'
+#    cmd += '     [scaled2][scaled3]hstack[bottom]; \\\n'
+#    cmd += '     [top][bottom]vstack[matrix]; \\\n'
+#    cmd += '     [matrix]fps=fps=60[outv];" \\\n'
+    cmd += '     [bg][scaled0]overlay[outv1]; \\\n'
+    cmd += '     [outv1][scaled1]overlay=x=W/2[outv2]; \\\n'
+    cmd += '     [outv2][scaled2]overlay=y=H/2[outv3]; \\\n'
+    cmd += '     [outv3][scaled3]overlay=x=W/2:y=H/2[matrix]; \\\n'
     cmd += '     [matrix]fps=fps=60[outv];" \\\n'
 
     """
@@ -288,6 +304,9 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         cmd += '-c:v libx265 -preset fast -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
         cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
 
+    elif encode == 'videotoolbox':
+        cmd += '-c:v hevc_videotoolbox -b:v 15000K -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
     else:
         cmd += '-c:v libx264 -preset veryfast -crf 29 -qp 10 -profile:v main -vf format=yuv420p \\\n'
         cmd += '-c:a aac -b:a 192k \\\n'
@@ -315,13 +334,15 @@ def compute_offsets(frames: list[int]) -> tuple[float, float, float, float]:
         sys.exit(1)
 
     # Compute deltas between videos, camera1 is at offset 0.0 by convention, so:
-    cam2 = frames[1] - frames[0]  # camera2 is this offset from camera1
-    cam3 = frames[3] - frames[2]  # camera3 is this offset from camera2
-    cam4 = frames[5] - frames[4]  # camera4 is this offset from camera3
+    cam2 = frames[0] - frames[1]  # camera2 is this offset from camera1
+    cam3 = frames[2] - frames[3]  # camera3 is this offset from camera2
+    cam4 = frames[4] - frames[5]  # camera4 is this offset from camera3
 
     cam1cam2 = cam2
     cam1cam3 = cam2 + cam3
     cam1cam4 = cam2 + cam3 + cam4
+
+    print(f"Offsets are {cam1cam2}; {cam1cam3}; {cam1cam4}")
 
     smallest = min(cam1cam2, cam1cam3, cam1cam4)
     base = 0.0
@@ -332,6 +353,8 @@ def compute_offsets(frames: list[int]) -> tuple[float, float, float, float]:
         cam1cam2 -= smallest
         cam1cam3 -= smallest
         cam1cam4 -= smallest
+    print(f"Adjusted are {base}; {cam1cam2}; {cam1cam3}; {cam1cam4}")
+
 
     return (base / 60.0, cam1cam2 / 60.0, cam1cam3 / 60.0, cam1cam4 / 60.0)
 
@@ -399,5 +422,5 @@ If the frames are omitted they are all treated as zero.
     metadata = load_metadata(input_directory)
 
     if all_camera_mp4s:
-        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory + "/combined.mp4", "H265", metadata)
+        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory + "/combined.mp4", "videotoolbox", metadata)
         print(command)

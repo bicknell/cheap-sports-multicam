@@ -209,10 +209,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     Stack the second two cameras left to right.
     Stack the two stacks vertically.
     """
-    cmd += '     [scaled0][scaled1]hstack[top]; \\\n'
-    cmd += '     [scaled2][scaled3]hstack[bottom]; \\\n'
-    cmd += '     [top][bottom]vstack[matrix]; \\\n'
-    cmd += '     [matrix]fps=fps=60[outv];" \\\n'
+    cmd += '     [scaled0][scaled1][scaled2][scaled3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0:shortest=1,fps=fps=60[outv];" \\\n'
 
     """
     Send the final video to the output.

@@ -390,7 +390,7 @@ def construct_stage4(directory: str, metadata: Dict[str, str]) -> str:
     """
     Set the output file name.
     """
-    cmd += f'{directory}/combined.mp4\n'
+    cmd += f'{directory}/final_game_video.mp4\n'
 
     return cmd
 

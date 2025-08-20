@@ -6,7 +6,7 @@ import os
 import tempfile
 import yaml
 import sys
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 def load_metadata(directory_path: str) -> Dict[str, str]:
     """
@@ -61,7 +61,7 @@ def collect_mp4_files(base_directory: str) -> list[list[str]]:
     and returns them as a sorted list of lists of MP4 file paths.
 
     Args:
-        base_directory (str): The root directory to search within.
+        base_directory (str): The root directory to search.
 
     Returns:
         list[list[str]]: A list where each inner list contains full paths to MP4 files
@@ -112,22 +112,20 @@ def collect_mp4_files(base_directory: str) -> list[list[str]]:
     return all_camera_mp4s
 
 
-def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, directory: str, encode: str, metadata: Dict[str, str]) -> str:
+def construct_stage1(files: list[list[str]], directory: str) -> Tuple[list[list[str]], str]:
     """
-    construct_ffmpeg_args
+    Stage 1: Concatinate (if required)
 
-    Build the ffmpeg arguments to process the videos.  I tried doing this all in one stage,
-    but it caused far too many memory leaks and slowdowns.
+    The cameras are limited to FAT32 file systems and can't produce a single file
+    for longer durations.  If there are multiple files per camera concatinate 
+    them into a single file.
 
-    Stage 1: If there are multiple video files from a camera, concatinate them with fast copy.
-    Stage 2: Combine the video files into a 4x4 tile.
-    Stage 3: Combine the audio files into a 4x4 tile.
-    Stage 4: Combine the resulting audio and video together using fast copy and add the metadata.
-    """
-
-    # Stage 1: Concatinate (if required)
-    """
-    ffmpeg wants the input files as a series of -i <filename> arguments.
+    Args:
+        - files     list[list[str]] Per-camera list of a list of filenames
+    
+    Returns:
+        - newfiles  list[list[str]] Per-camera list of a list of filenames after
+        - cmd       str The command to generate the concatinated files.
     """
     cmd: str = ""
     newfiles: list[list[str]] = []
@@ -140,6 +138,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
                 fp.write(b"file '")
                 fp.write(bytes(f, 'ascii'))
                 fp.write(b"'\n")
+            # This is the super-fast way to concatinate
             cmd += f"ffmpeg -f concat -safe 0 -i {fp.name} -c copy {directory}/camera{cam+1}/combined.mp4\n"
             newfiles.append([f'{directory}/camera{cam+1}/combined.mp4'])
             fp.close()
@@ -147,9 +146,114 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
             newfiles.append(cam_list)
     files = newfiles
 
+    return (files, cmd)
 
-    # Stage 2: Combine video into 4x4 tile.
-    cmd += "# Stage 2: Combine video\n"
+def video_encoding(encode: str) -> str:
+    """
+    Generate the parameter string to encode a video.
+
+    Args:
+        encode      str A keyword with the type of encoding
+
+    Returns:
+        cmd         str The command as a string
+    """
+
+    cmd: str = ""
+
+    if encode == 'YouTube':
+        """
+        I asked gemini.google.com for the best settings for uploading to YouTube.
+
+        - -c:v libx264, aka H.264/MPEG-4 AVC
+        - -preset veryfast
+            - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+            - Controls encoding speed, and resulting output file size.  Tweak down
+                on faster / hardware accelerated computers.
+        - -crf 21, aka Constant Rate Factor
+            - 18-28 is generally acceptable.
+            - Smaller values == larger files and more "quality"
+        - -refs 4, aka Reference Frames
+            - How many frames the encoder can look at, higher == smaller files but more CPU.
+        - H.264 Profile "high"
+            - Other options: baseline, main, high, high10, high442, high444
+        - GOP size
+            - I'm told 60 should work everywhere, and more may not work with some players.
+        - B-frames between i/p-frames
+            - I'm told 2 should work everywhere, and more may not work with some players.
+        - Move the moov atom to the start of the file to allow immediate playback when streaming
+        - -c:a aac, aka AAC-LC
+        - -b:a, set audio bitrate to 192kbps
+        """
+        cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 -movflags faststart \\\n'
+    elif encode == 'H265':
+        """
+        - -c:v libx265, aka H.265/HEVC
+        - -preset fast
+            - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+            - Controls encoding speed, and resulting output file size.  Tweak down
+                on faster / hardware accelerated computers.
+        - -crf 26, aka Constant Rate Factor
+            - 18-28 is generally acceptable.
+            - Smaller values == larger files and more "quality"
+        - H.265 Profile "main"
+            - Other options:
+        - B-frames between i/p-frames
+            - 4 for this codec
+        - x265-params
+            - fast-intra=1 Helps reduce encoding time, works better for streaming
+            - no-open-gop=1 Improves compatability
+            - refs=4 Look at 4 frames before and 4 frames after for encoding.
+        - Move the moov atom to the start of the file to allow immediate playback when streaming
+        - -c:a aac, aka AAC-LC
+        - -b:a, set audio bitrate to 192kbps
+        """
+        cmd += '-c:v libx265 -preset fast -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
+    elif encode == 'H265-nv':
+        """
+        - -c:v hevc_nvec NVIDA Hardware Accelerated H.265/HEVC
+        - -preset p4 Quality setting, from p1 (best) to p9 (worst)
+        - -cq:v 28 An additional quality setting
+        - H.265 Profile "main"
+            - Other options:
+        - -strict-gop 1 same as no-opengop=1
+        """
+        cmd += '-c:v hevc_nvenc -preset p4 -cq:v 28 -profile:v main -strict_gop 1 -rgb_mode yuv420 -tag:v hvc1 -movflags faststart \\\n'
+    elif encode == 'videotoolbox':
+        """
+        - -c:v hevc_videotoolbox Apple's accelerated H.265/HVEC
+        - -b:v Set the bit-rate of the video.
+        """
+        cmd += '-c:v hevc_videotoolbox -b:v 15000K -tag:v hvc1 -movflags faststart \\\n'
+    else:
+        """
+        - -c:v libx264 H264
+        - -preset veryfast
+            - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+            - Controls encoding speed, and resulting output file size.  Tweak down
+                on faster / hardware accelerated computers.
+        - -crf 29, aka Constant Rate Factor
+            - 20-32 is generally acceptable.
+            - Smaller values == larger files and more "quality"
+        - -qp 10
+        - H.264 Profile "main"
+            - Other options: baseline, main, high, high10, high442, high444
+        """
+        cmd += '-c:v libx264 -preset veryfast -crf 29 -qp 10 -profile:v main -vf format=yuv420p \\\n'
+
+    return cmd
+
+
+def construct_stage2(files: list[list[str]], offsets: tuple[int, int, int, int], directory: str, encode: str) -> str:
+    """
+    Combines the video from the 4 inputs into a 2x2 matrix.
+
+    Args:
+
+    Returns:
+
+    """
+    cmd: str = "# Stage 2: Combine video\n"
     cmd += "ffmpeg \\\n"
 
     """
@@ -166,26 +270,6 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     Construct a filter_complex filter that will combine the video.
     """
     cmd += '-filter_complex " \\\n'
-
-    """
-    Construct a concat for each camera that combines the multiple
-    files generated by the camera into one video and one audio 
-    stream.
-
-    TODO: If there is only one file a concat won't work and is unnecessary.
-          Need to add handling for that case.
-    """
-    video = 0
-    for cam, cam_list in enumerate(files):
-        # If there are multiple videos we must concatinate them together.
-        if len(cam_list) > 1:
-            # To avoid incrementing videos twice, increment a throwaway the first time.
-            index = video
-            cmd += '     '
-            for f in cam_list:
-                cmd += f'[{index},v]'
-                index += 1
-            cmd += f'concat=n={len(cam_list)}:v=1:a=0[v{cam}_concat]; \\\n'
 
     """
     PTS-STARTPTS calculates the new timestamp for each frame by subtracting the initial
@@ -196,18 +280,11 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     This is also used to adjust the delay between the two cameras, note that although
     the previous code made all the delays positive, this code needs them as negative!
     """
-    for cam, cam_file_list in enumerate(files):
-        if len(cam_file_list) > 1:
-            cmd += f'     [v{cam}_concat]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
-        else:
-            cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
+    for cam, cam_list in enumerate(files):
+        cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
 
     """
     Tile the video in a 2x2 matrix.
-
-    Stack the first two cameras left to right.
-    Stack the second two cameras left to right.
-    Stack the two stacks vertically.
     """
     cmd += '     [scaled0][scaled1][scaled2][scaled3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0:shortest=1,fps=fps=60[outv];" \\\n'
 
@@ -218,65 +295,14 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     """
     Generate output parameters
     """
-    if encode == 'YouTube':
-        """
-        I asked gemini.google.com for the best settings for uploading to YouTube.
-
-        - -c:v libx264, aka H.264/MPEG-4 AVC
-        - -preset veryfast
-           - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-           - Controls encoding speed, and resulting output file size.  Tweak down
-             on faster / hardware accelerated computers.
-        - -crf 21, aka Constant Rate Factor
-           - 18-28 is generally acceptable.
-           - Smaller values == larger files and more "quality"
-        - -refs 4, aka Reference Frames
-           - How many frames the encoder can look at, higher == smaller files but more CPU.
-        - H.264 Profile "high"
-           - Other options: baseline, main, high, high10, high442, high444
-        - GOP size
-           - I'm told 60 should work everywhere, and more may not work with some players.
-        - B-frames between i/p-frames
-           - I'm told 2 should work everywhere, and more may not work with some players.
-        - Move the moov atom to the start of the file to allow immediate playback when streaming
-        - -c:a aac, aka AAC-LC
-        - -b:a, set audio bitrate to 192kbps
-        """
-        cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 -movflags faststart \\\n'
-    elif encode == 'H265':
-        """
-        - -c:v libx265, aka H.265/HEVC
-        - -preset fast
-           - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
-           - Controls encoding speed, and resulting output file size.  Tweak down
-             on faster / hardware accelerated computers.
-        - -crf 26, aka Constant Rate Factor
-           - 18-28 is generally acceptable.
-           - Smaller values == larger files and more "quality"
-        - H.264 Profile "main"
-           - Other options: baseline, main, high, high10, high442, high444
-        - B-frames between i/p-frames
-           - 4 for this codec
-        - x265-params
-           - fast-intra=1 Helps reduce encoding time, works better for streaming
-           - no-open-gop=1 Improves compatability
-           - refs=4 Look at 4 frames before and 4 frames after for encoding.
-        - Move the moov atom to the start of the file to allow immediate playback when streaming
-        - -c:a aac, aka AAC-LC
-        - -b:a, set audio bitrate to 192kbps
-        """
-        cmd += '-c:v libx265 -preset fast -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
-    elif encode == 'H265-nv':
-        cmd += '-c:v hevc_nvenc -preset p4 -cq:v 28 -profile:v main -strict_gop 1 -rgb_mode yuv420 -tag:v hvc1 -movflags faststart \\\n'
-    elif encode == 'videotoolbox':
-        cmd += '-c:v hevc_videotoolbox -b:v 15000K -tag:v hvc1 -movflags faststart \\\n'
-    else:
-        cmd += '-c:v libx264 -preset veryfast -crf 29 -qp 10 -profile:v main -vf format=yuv420p \\\n'
-
+    cmd += video_encoding(encode)
     cmd += f'{directory}/combined-video.mp4\n'
 
+    return cmd
+
+def construct_stage3(files: list[list[str]], offsets: tuple[int, int, int, int], directory: str, one_audio: bool) -> str:
     # Stage 3: Combine audio
-    cmd += "# Stage 3: Combine audio\n"
+    cmd: str = "# Stage 3: Combine audio\n"
     cmd += "ffmpeg \\\n"
 
     """
@@ -294,24 +320,6 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     """
     cmd += '-filter_complex " \\\n'
 
-    """
-    Construct a concat for each camera that combines the multiple
-    files generated by the camera into one video and one audio 
-    stream.
-
-    TODO: If there is only one file a concat won't work and is unnecessary.
-          Need to add handling for that case.
-    """
-    video = 0
-    for cam, cam_list in enumerate(files):
-        # If there are multiple videos we must concatinate them together.
-        if len(cam_list) > 1:
-            # To avoid incrementing videos twice, increment a throwaway the first time.
-            cmd += '     '
-            for f in cam_list:
-                cmd += f'[{video},a]'
-                video += 1
-            cmd += f'concat=n={len(cam_list)}:v=0:a=1[a{cam}_concat]; \\\n'
     if one_audio:
         """
         Output a single stereo stream.
@@ -325,23 +333,12 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
               CLI or in a config file.
         """
         for cam, cam_list in enumerate(files):
-            if len(cam_file_list) > 1:
-                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
-            else:
                 cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
         cmd += '     '
         for cam, cam_list in enumerate(files):
             cmd += f'[a{cam}_adj]'
         # Don't use longest instead of first, it causes it to buffer all the audio in memory.
         cmd += f'amix=inputs={len(files)}:duration=first:dropout_transition=2[aud_mix];" \\\n';
-
-    """
-    Send the audio to the output.
-    """
-    if one_audio:
-        """
-        A single stereo stream.
-        """
         cmd += '-map "[aud_mix]" \\\n'
     else:
         """
@@ -357,17 +354,28 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
 
 
     """
-    Audio output parameters
+    Audio encoding parameters
     """
     cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
     cmd += f'{directory}/combined-audio.m4a\n'
 
+    return cmd
 
-    # Stage 4: Final combine
-    cmd += "# Stage 4: Final combine\n"
+def construct_stage4(directory: str, metadata: Dict[str, str]) -> str:
+    """
+    Take the final video and audio files and combine them into a single output file.
+    Set the metadata on the output file.
+
+    Args:
+
+    Returns:
+
+    """
+    cmd: str = "# Stage 4: Final combine\n"
     cmd += "ffmpeg \\\n"
     cmd += f'-i {directory}/combined-video.mp4 \\\n'
     cmd += f'-i {directory}/combined-audio.m4a \\\n'
+    # This is the fast way to copy.
     cmd += '-c:v copy -c:a copy -map 0:v:0 -map 1:a:0 \\\n'
 
     # 
@@ -387,7 +395,46 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     return cmd
 
 
+def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, directory: str, encode: str, metadata: Dict[str, str]) -> str:
+    """
+    construct_ffmpeg_args
+
+    Build the ffmpeg arguments to process the videos.  I tried doing this all in one stage,
+    but it caused far too many memory leaks and slowdowns.
+
+    Stage 1: If there are multiple video files from a camera, concatinate them with fast copy.
+    Stage 2: Combine the video files into a 4x4 tile.
+    Stage 3: Combine the audio files into a 4x4 tile.
+    Stage 4: Combine the resulting audio and video together using fast copy and add the metadata.
+    """
+
+    (files, cmd) = construct_stage1(files, directory)
+    cmd += construct_stage2(files, offsets, directory, encode)
+    cmd += construct_stage3(files, offsets, directory, one_audio)
+    cmd += construct_stage4(directory, metadata)
+   
+    return cmd
+
+
 def compute_offsets(frames: list[int]) -> tuple[float, float, float, float]:
+    """
+    Takes a list of corresponding frames and returns time offsets.
+
+    NOTE: Assumes 60FPS
+
+    Args:
+        frames      list[int] 6 integers indicating the following
+                        1. Frame number from camera1 where camera1 and camera2 are in sync.
+                        2. Frame number from camera2 where camera1 and camera2 are in sync.
+                        3. Frame number from camera2 where camera2 and camera3 are in sync.
+                        4. Frame number from camera3 where camera2 and camera3 are in sync.
+                        5. Frame number from camera3 where camera3 and camera4 are in sync.
+                        6. Frame number from camera4 where camera3 and camera4 are in sync.
+
+    Returns:
+        offsets     Tuple(float, float, float, float) Offsets for camera1, 2, 3, and 4.
+                        One of the offsets is guaranteed to be 0.
+    """
     if len(frames) != 6:
         print("Wrong number of frame arguments.")
         sys.exit(1)
@@ -477,5 +524,5 @@ If the frames are omitted they are all treated as zero.
     metadata = load_metadata(input_directory)
 
     if all_camera_mp4s:
-        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory, "videotoolbox", metadata)
+        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory, "H265", metadata)
         print(command)

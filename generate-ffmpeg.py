@@ -390,7 +390,10 @@ def construct_stage4(directory: str, metadata: Dict[str, str]) -> str:
     """
     Set the output file name.
     """
-    cmd += f'{directory}/final_game_video.mp4\n'
+    cmd += f'{directory}/video_to_trim.mp4\n'
+    cmd += '# Trim Video\n'
+    cmd += '# Enter time after -ss to trim from the front of the video.'
+    cmd += f'#ffmpeg -ss MM:SS -i {directory}/video_to_trim.mp4 -c copy {directory}/final_video.mp4\n'
 
     return cmd
 

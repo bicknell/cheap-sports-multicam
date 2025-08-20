@@ -270,7 +270,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
            - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
            - Controls encoding speed, and resulting output file size.  Tweak down
              on faster / hardware accelerated computers.
-        - -crf 20, aka Constant Rate Factor
+        - -crf 26, aka Constant Rate Factor
            - 18-28 is generally acceptable.
            - Smaller values == larger files and more "quality"
         - H.264 Profile "main"
@@ -285,7 +285,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         - -c:a aac, aka AAC-LC
         - -b:a, set audio bitrate to 192kbps
         """
-        cmd += '-c:v libx265 -preset fast -crf 20 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:v libx265 -preset fast -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
         cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
 
     else:

@@ -113,26 +113,43 @@ def collect_mp4_files(base_directory: str) -> list[list[str]]:
 
 
 def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, directory: str, encode: str, metadata: Dict[str, str]) -> str:
+    """
+    construct_ffmpeg_args
 
-    # Build Concats
+    Build the ffmpeg arguments to process the videos.  I tried doing this all in one stage,
+    but it caused far too many memory leaks and slowdowns.
+
+    Stage 1: If there are multiple video files from a camera, concatinate them with fast copy.
+    Stage 2: Combine the video files into a 4x4 tile.
+    Stage 3: Combine the audio files into a 4x4 tile.
+    Stage 4: Combine the resulting audio and video together using fast copy and add the metadata.
+    """
+
+    # Stage 1: Concatinate (if required)
     """
     ffmpeg wants the input files as a series of -i <filename> arguments.
     """
     cmd: str = ""
     newfiles: list[list[str]] = []
     for cam, cam_list in enumerate(files):
+        # Do we need to concatinate multiple?
         if len(cam_list) > 1:
-            cmd += f"# Concatinate camera {cam+1}\n"
+            cmd += f"# Stage 1: Concatinate camera {cam+1}\n"
             fp = tempfile.NamedTemporaryFile(delete=False, delete_on_close=False)
             for f in cam_list:
                 fp.write(b"file '")
                 fp.write(bytes(f, 'ascii'))
                 fp.write(b"'\n")
             cmd += f"ffmpeg -f concat -safe 0 -i {fp.name} -c copy {directory}/camera{cam+1}/combined.mp4\n"
+            newfiles.append([f'{directory}/camera{cam+1}/combined.mp4'])
             fp.close()
-    
+        else:
+            newfiles.append(cam_list)
     files = newfiles
-    cmd += "# tile videos\n"
+
+
+    # Stage 2: Combine video into 4x4 tile.
+    cmd += "# Stage 2: Combine video\n"
     cmd += "ffmpeg \\\n"
 
     """
@@ -170,12 +187,6 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
                 index += 1
             cmd += f'concat=n={len(cam_list)}:v=1:a=0[v{cam}_concat]; \\\n'
 
-            cmd += '     '
-            for f in cam_list:
-                cmd += f'[{video},a]'
-                video += 1
-            cmd += f'concat=n={len(cam_list)}:v=0:a=1[a{cam}_concat]; \\\n'
-
     """
     PTS-STARTPTS calculates the new timestamp for each frame by subtracting the initial
     timestamp from its current timestamp. This effectively resets the video's timeline
@@ -190,31 +201,6 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
             cmd += f'     [v{cam}_concat]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
         else:
             cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
-
-    """
-    Process the audio portion, here there are two choices.
-    """
-    if one_audio:
-        """
-        Output a single stereo stream.
-
-        First output a volume adjustment line for each camera so the user can
-        tweak the volume.
-
-        Second combine the 4 adjusted audio streams into a single stereo stream.
-
-        TODO: The user should be able to specify the volume adjustments at the 
-              CLI or in a config file.
-        """
-        for cam, cam_list in enumerate(files):
-            if len(cam_file_list) > 1:
-                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
-            else:
-                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
-        cmd += '     '
-        for cam, cam_list in enumerate(files):
-            cmd += f'[a{cam}_adj]'
-        cmd += f'amix=inputs={len(files)}:duration=longest:dropout_transition=2[aud_mix]; \\\n';
 
     """
     Tile the video in a 2x2 matrix.
@@ -232,28 +218,6 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     Send the final video to the output.
     """
     cmd += '-map "[outv]" \\\n'
-    
-    """
-    Send the audio to the output.
-    """
-    if one_audio:
-        """
-        A single stereo stream.
-        """
-        cmd += '-map "[aud_mix]" \\\n'
-    else:
-        """
-        All 4 audio streams individually.
-        """
-        for cam, cam_list in files:
-            if cam > 0:
-                cmd += ' '
-            first = False
-            cmd += f'-map "[a{cam}_adj]"'
-            cam += 1
-        cmd += ' \\\n'
-
-
     """
     Generate output parameters
     """
@@ -282,7 +246,6 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         - -b:a, set audio bitrate to 192kbps
         """
         cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 -movflags faststart \\\n'
-        cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
     elif encode == 'H265':
         """
         - -c:v libx265, aka H.265/HEVC
@@ -306,18 +269,114 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         - -b:a, set audio bitrate to 192kbps
         """
         cmd += '-c:v libx265 -preset fast -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
-        cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
+    elif encode == 'H265-nv':
+        cmd += '-c:v hevc_nvenc -preset p4 -cq:v 28 -profile:v main -strict_gop 1 -rgb_mode yuv420 -tag:v hvc1 -movflags faststart \\\n'
     elif encode == 'videotoolbox':
         cmd += '-c:v hevc_videotoolbox -b:v 15000K -tag:v hvc1 -movflags faststart \\\n'
-        cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
     else:
         cmd += '-c:v libx264 -preset veryfast -crf 29 -qp 10 -profile:v main -vf format=yuv420p \\\n'
-        cmd += '-c:a aac -b:a 192k \\\n'
 
+    cmd += f'{directory}/combined-video.mp4 \\\n'
+
+    # Stage 3: Combine audio
+    cmd += "# Stage 3: Combine audio\n"
+    cmd += "ffmpeg \\\n"
+
+    """
+    ffmpeg wants the input files as a series of -i <filename> arguments.
+    """
+    for n, cam_list in enumerate(files):
+        # Add -i for each file in the current list
+        for f in cam_list:
+            cmd += f'-i {f} '
+    
+        cmd += '\\\n'
+
+    """
+    Construct a filter_complex filter that will combine the video.
+    """
+    cmd += '-filter_complex " \\\n'
+
+    """
+    Construct a concat for each camera that combines the multiple
+    files generated by the camera into one video and one audio 
+    stream.
+
+    TODO: If there is only one file a concat won't work and is unnecessary.
+          Need to add handling for that case.
+    """
+    video = 0
+    for cam, cam_list in enumerate(files):
+        # If there are multiple videos we must concatinate them together.
+        if len(cam_list) > 1:
+            # To avoid incrementing videos twice, increment a throwaway the first time.
+            cmd += '     '
+            for f in cam_list:
+                cmd += f'[{video},a]'
+                video += 1
+            cmd += f'concat=n={len(cam_list)}:v=0:a=1[a{cam}_concat]; \\\n'
+    if one_audio:
+        """
+        Output a single stereo stream.
+
+        First output a volume adjustment line for each camera so the user can
+        tweak the volume.
+
+        Second combine the 4 adjusted audio streams into a single stereo stream.
+
+        TODO: The user should be able to specify the volume adjustments at the 
+              CLI or in a config file.
+        """
+        for cam, cam_list in enumerate(files):
+            if len(cam_file_list) > 1:
+                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
+            else:
+                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
+        cmd += '     '
+        for cam, cam_list in enumerate(files):
+            cmd += f'[a{cam}_adj]'
+        # Don't use longest instead of first, it causes it to buffer all the audio in memory.
+        cmd += f'amix=inputs={len(files)}:duration=first:dropout_transition=2[aud_mix]; \\\n';
+
+    """
+    Send the audio to the output.
+    """
+    if one_audio:
+        """
+        A single stereo stream.
+        """
+        cmd += '-map "[aud_mix]" \\\n'
+    else:
+        """
+        All 4 audio streams individually.
+        """
+        for cam, cam_list in files:
+            if cam > 0:
+                cmd += ' '
+            first = False
+            cmd += f'-map "[a{cam}_adj]"'
+            cam += 1
+        cmd += ' \\\n'
+
+
+    """
+    Audio output parameters
+    """
+    cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
+    cmd += f'{directory}/combined-audio.m4a'
+
+
+    # Stage 4: Final combine
+    cmd += "# Stage 4: Final combine\n"
+    cmd += "ffmpeg \\\n"
+    cmd += f'-i {directory}/combined-video.mp4 \\\n'
+    cmd += f'-i {directory}/combined-audio.m4a \\\n'
+    cmd += '-c:v copy -c:a copy -map 0:v:0 -map 1:a:0 \\\n'
+
+    # 
     """
     Set Metadata
     """
-
     for k, v in metadata.items():
         if v is not None and v != '':
             cmd += f'-metadata {k}="{v}" '
@@ -421,5 +480,5 @@ If the frames are omitted they are all treated as zero.
     metadata = load_metadata(input_directory)
 
     if all_camera_mp4s:
-        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory, "H265", metadata)
+        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory, "videotoolbox", metadata)
         print(command)

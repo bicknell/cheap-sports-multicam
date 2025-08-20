@@ -276,7 +276,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     else:
         cmd += '-c:v libx264 -preset veryfast -crf 29 -qp 10 -profile:v main -vf format=yuv420p \\\n'
 
-    cmd += f'{directory}/combined-video.mp4 \\\n'
+    cmd += f'{directory}/combined-video.mp4\n'
 
     # Stage 3: Combine audio
     cmd += "# Stage 3: Combine audio\n"
@@ -336,7 +336,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         for cam, cam_list in enumerate(files):
             cmd += f'[a{cam}_adj]'
         # Don't use longest instead of first, it causes it to buffer all the audio in memory.
-        cmd += f'amix=inputs={len(files)}:duration=first:dropout_transition=2[aud_mix]; \\\n';
+        cmd += f'amix=inputs={len(files)}:duration=first:dropout_transition=2[aud_mix];" \\\n';
 
     """
     Send the audio to the output.
@@ -363,7 +363,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     Audio output parameters
     """
     cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
-    cmd += f'{directory}/combined-audio.m4a'
+    cmd += f'{directory}/combined-audio.m4a\n'
 
 
     # Stage 4: Final combine

@@ -3,6 +3,7 @@
 import argparse
 import glob
 import os
+import tempfile
 import yaml
 import sys
 from typing import Dict, Optional
@@ -111,9 +112,28 @@ def collect_mp4_files(base_directory: str) -> list[list[str]]:
     return all_camera_mp4s
 
 
-def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, output: str, encode: str, metadata: Dict[str, str]) -> str:
+def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, directory: str, encode: str, metadata: Dict[str, str]) -> str:
 
-    cmd: str = "ffmpeg \\\n"
+    # Build Concats
+    """
+    ffmpeg wants the input files as a series of -i <filename> arguments.
+    """
+    cmd: str = ""
+    newfiles: list[list[str]] = []
+    for cam, cam_list in enumerate(files):
+        if len(cam_list) > 1:
+            cmd += f"# Concatinate camera {cam+1}\n"
+            fp = tempfile.NamedTemporaryFile(delete=False, delete_on_close=False)
+            for f in cam_list:
+                fp.write(b"file '")
+                fp.write(bytes(f, 'ascii'))
+                fp.write(b"'\n")
+            cmd += f"ffmpeg -f concat -safe 0 -i {fp.name} -c copy {directory}/camera{cam+1}/combined.mp4\n"
+            fp.close()
+    
+    files = newfiles
+    cmd += "# tile videos\n"
+    cmd += "ffmpeg \\\n"
 
     """
     ffmpeg wants the input files as a series of -i <filename> arguments.
@@ -167,9 +187,9 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     """
     for cam, cam_file_list in enumerate(files):
         if len(cam_file_list) > 1:
-            cmd += f'     [v{cam}_concat]scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
+            cmd += f'     [v{cam}_concat]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
         else:
-            cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[scaled{cam}]; \\\n'
+            cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
 
     """
     Process the audio portion, here there are two choices.
@@ -188,9 +208,9 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         """
         for cam, cam_list in enumerate(files):
             if len(cam_file_list) > 1:
-                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[a{cam}_adj]; \\\n';
+                cmd += f'     [a{cam}_concat]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
             else:
-                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS-{offsets[cam]:.3f}/TB[a{cam}_adj]; \\\n';
+                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
         cmd += '     '
         for cam, cam_list in enumerate(files):
             cmd += f'[a{cam}_adj]'
@@ -287,7 +307,9 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
         """
         cmd += '-c:v libx265 -preset fast -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
         cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
-
+    elif encode == 'videotoolbox':
+        cmd += '-c:v hevc_videotoolbox -b:v 15000K -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
     else:
         cmd += '-c:v libx264 -preset veryfast -crf 29 -qp 10 -profile:v main -vf format=yuv420p \\\n'
         cmd += '-c:a aac -b:a 192k \\\n'
@@ -304,7 +326,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     """
     Set the output file name.
     """
-    cmd += f'{output}\n'
+    cmd += f'{directory}/combined.mp4\n'
 
     return cmd
 
@@ -315,9 +337,9 @@ def compute_offsets(frames: list[int]) -> tuple[float, float, float, float]:
         sys.exit(1)
 
     # Compute deltas between videos, camera1 is at offset 0.0 by convention, so:
-    cam2 = frames[1] - frames[0]  # camera2 is this offset from camera1
-    cam3 = frames[3] - frames[2]  # camera3 is this offset from camera2
-    cam4 = frames[5] - frames[4]  # camera4 is this offset from camera3
+    cam2 = frames[0] - frames[1]  # camera2 is this offset from camera1
+    cam3 = frames[2] - frames[3]  # camera3 is this offset from camera2
+    cam4 = frames[4] - frames[5]  # camera4 is this offset from camera3
 
     cam1cam2 = cam2
     cam1cam3 = cam2 + cam3
@@ -399,5 +421,5 @@ If the frames are omitted they are all treated as zero.
     metadata = load_metadata(input_directory)
 
     if all_camera_mp4s:
-        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory + "/combined.mp4", "H265", metadata)
+        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory, "H265", metadata)
         print(command)

@@ -189,11 +189,11 @@ def video_encoding(encode: str) -> str:
     elif encode == 'H265':
         """
         - -c:v libx265, aka H.265/HEVC
-        - -preset fast
+        - -preset medium
             - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
             - Controls encoding speed, and resulting output file size.  Tweak down
                 on faster / hardware accelerated computers.
-        - -crf 26, aka Constant Rate Factor
+        - -crf 21, aka Constant Rate Factor
             - 18-28 is generally acceptable.
             - Smaller values == larger files and more "quality"
         - H.265 Profile "main"
@@ -208,7 +208,7 @@ def video_encoding(encode: str) -> str:
         - -c:a aac, aka AAC-LC
         - -b:a, set audio bitrate to 192kbps
         """
-        cmd += '-c:v libx265 -preset fast -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:v libx265 -preset fast -crf 21 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
     elif encode == 'H265-nv':
         """
         - -c:v hevc_nvec NVIDA Hardware Accelerated H.265/HEVC
@@ -224,9 +224,10 @@ def video_encoding(encode: str) -> str:
         - -c:v hevc_videotoolbox Apple's accelerated H.265/HVEC
         - -b:v Set the bit-rate of the video.
         """
-        cmd += '-c:v hevc_videotoolbox -b:v 15000K -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:v hevc_videotoolbox -b:v 35000K -tag:v hvc1 -movflags faststart \\\n'
     else:
         """
+        A low quality but very fast catchall.
         - -c:v libx264 H264
         - -preset veryfast
             - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow

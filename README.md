@@ -84,8 +84,11 @@ want, then cut and paste into a bash shell terminal.  ffmpeg will run and build
 the video as GAMEDIR/final\_video.mp4
 
 WARNING: These video files are extremely large.  Expect a 90 minute soccer game to be
-around 5G per camera, or 20G of total video.  The resulting output file of them
-tiled together will be 10-14G.  Even on a fast box processing may take 2x-4x realtime.
+         around 5G per camera, or 20G of total video.  The resulting output file of them
+         tiled together will be 10-14G.  Even on a fast box processing may take 2x-4x realtime.
+
+See [DigitalOceanVideo](DigitalOceanVideo/) for a workflow to store the files in a Digital
+Ocean Space and process them on a Digitial Ocean Droplet.
 
 ## Soccer Specifc Notes
 

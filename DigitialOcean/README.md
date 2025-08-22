@@ -17,6 +17,16 @@ will be a space name like:
 s3://my-space-name.nyc3.digitialoceanspaces.com/
 ```
 
+WARNING: If you enable the "CDN" option on your space, beware of the following.
+         The first download will cost 1x bandwidth to transfer from the space
+         to the CDN, and then 1x bandwidth from the CDN to the user.  If you
+         plan to only download once it doubles your bandwidth for no reason.
+         Also, if you use the feature to share a timed access URL with a user
+         and have CDN enabled you will pay 2x for EVERY ACCESS, because the
+         same thing happens and it can't be cached.  Only enable the CDN if
+         you're going to be using it to serve up many, many copies of the same
+         public file.
+
 ### Use s3cmd to Upload
 
 Set up [s3cmd](https://s3tools.org/s3cmd) following instructions for your platform.
@@ -54,6 +64,7 @@ The rest of the scripts assume the Access Token is in `DIGITAL_OCEAN_TOKEN`:
 
 ```
 $ export DIGITAL_OCEAN_TOKEN="thetokenyoudownloaded"
+```
 
 ### Install Prereqs
 

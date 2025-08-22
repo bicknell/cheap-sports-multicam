@@ -81,7 +81,11 @@ generate-ffmpeg.py /Path/to/GAMEDIR f1 f2 f3 f4 f5 f6
 
 A command line will be generated to stdout.  Inspect it to be sure it does what you
 want, then cut and paste into a bash shell terminal.  ffmpeg will run and build
-the video as GAMEDIR/combined.mp4
+the video as GAMEDIR/final\_video.mp4
+
+WARNING: These video files are extremely large.  Expect a 90 minute soccer game to be
+around 5G per camera, or 20G of total video.  The resulting output file of them
+tiled together will be 10-14G.  Even on a fast box processing may take 2x-4x realtime.
 
 ## Soccer Specifc Notes
 
@@ -91,17 +95,19 @@ How I record a soccer game.
 - Visualize where the extended 18 yard box line would hit the sideline.  Walk 3 paces
   down the side line towards the center of the field, then turn and walk 5 paces away
   from the field.  Set up the tripod.
-- I use a 16 degree down angle on the 0 degree camera, and a 18 degree down angle on 
+- I use a 17 degree downward tilt on the cameras, measured with my phone.
   the 55 degree camera.
 - On the Brave 7 LE, I configure as follows:
    - H.265
-   - 1080P60
+   - 1080P30
    - Turn off auto-shutdown.
    - Set exposure to auto, and then set EV to -1 as they tend to overexpose.
    - Set the date stamp to appear on the screen.
    - Turn on Wifi and connect with the phone app, this syncs the time from the phone
      to the camera, turn off WiFi.
    - Set the zoom to 1.8.
+      - Zooms up to 2.5 work good on the camera facing the center, but more zoom
+        starts to cut off parts of the sideline.
 - Start the cameras and raise the tripod to full height.  Align the 0 degree camera to
   look straight across the field.  The 55 degree camera should be looking roughly
   towards the center of the field.

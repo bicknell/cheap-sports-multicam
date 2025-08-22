@@ -362,7 +362,7 @@ def construct_stage3(files: list[list[str]], offsets: tuple[int, int, int, int],
 
     return cmd
 
-def construct_stage4(directory: str, metadata: Dict[str, str]) -> str:
+def construct_stage4(directory: str, metadata: Dict[str, str], trim: float) -> str:
     """
     Take the final video and audio files and combine them into a single output file.
     Set the metadata on the output file.
@@ -394,12 +394,12 @@ def construct_stage4(directory: str, metadata: Dict[str, str]) -> str:
     cmd += f'{directory}/video_to_trim.mp4\n'
     cmd += '# Trim Video\n'
     cmd += '# Enter time after -ss to trim from the front of the video.\n'
-    cmd += f'#ffmpeg -ss MM:SS -i {directory}/video_to_trim.mp4 -c copy {directory}/final_video.mp4\n'
+    cmd += f'ffmpeg -ss {trim:.3f} -i {directory}/video_to_trim.mp4 -c copy {directory}/final_video.mp4\n'
 
     return cmd
 
 
-def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, int], one_audio: bool, directory: str, encode: str, metadata: Dict[str, str]) -> str:
+def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[float, float, float, float], one_audio: bool, directory: str, encode: str, metadata: Dict[str, str]) -> str:
     """
     construct_ffmpeg_args
 
@@ -415,7 +415,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[int, int, int, 
     (files, cmd) = construct_stage1(files, directory)
     cmd += construct_stage2(files, offsets, directory, encode)
     cmd += construct_stage3(files, offsets, directory, one_audio)
-    cmd += construct_stage4(directory, metadata)
+    cmd += construct_stage4(directory, metadata, max(offsets))
    
     return cmd
 

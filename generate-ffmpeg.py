@@ -182,8 +182,6 @@ def video_encoding(encode: str) -> str:
         - B-frames between i/p-frames
             - I'm told 2 should work everywhere, and more may not work with some players.
         - Move the moov atom to the start of the file to allow immediate playback when streaming
-        - -c:a aac, aka AAC-LC
-        - -b:a, set audio bitrate to 192kbps
         """
         cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 -movflags faststart \\\n'
     elif encode == 'H265':
@@ -205,10 +203,8 @@ def video_encoding(encode: str) -> str:
             - no-open-gop=1 Improves compatability
             - refs=4 Look at 4 frames before and 4 frames after for encoding.
         - Move the moov atom to the start of the file to allow immediate playback when streaming
-        - -c:a aac, aka AAC-LC
-        - -b:a, set audio bitrate to 192kbps
         """
-        cmd += '-c:v libx265 -preset fast -crf 21 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:v libx265 -preset medium -crf 22 -profile:v main -g 60 -bf 4 -ctu_size 64 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
     elif encode == 'H265-nv':
         """
         - -c:v hevc_nvec NVIDA Hardware Accelerated H.265/HEVC
@@ -356,8 +352,10 @@ def construct_stage3(files: list[list[str]], offsets: tuple[int, int, int, int],
 
     """
     Audio encoding parameters
+        - -c:a libfdk_aac, aka AAC-LC encoded by libfdk
+        - -b:a, set audio bitrate to 96kbps
     """
-    cmd += '-c:a aac -b:a 384k -ar 48000 -ac 2 \\\n'
+    cmd += '-c:a libfdk_aac -b:a 96k -ar 48000 \\\n'
     cmd += f'{directory}/combined-audio.m4a\n'
 
     return cmd

@@ -22,6 +22,10 @@ cameras.
   most conditions.
   - The parts are built around a "GoPro" style mount, so pretty much any action cam
     should work.
+  - WARNING: Akaso has sold two very different cameras under the same name of 
+    "Akaso Brave 7 LE", and externally they look identical.  The newer model has vastly 
+    internals and software.  All my instructions are for the newer model, running
+    Firmware 1.3, and listed as manual "580+386\_V1.0" on Akaso's web site.
 - 2 [Neewer 4M Light Stands](https://www.amazon.com/dp/B0BTL5XYN6), which were one
   of the more affordable ways to get the cameras up in the air.  Getting the cameras
   up makes a HUGE difference.
@@ -99,15 +103,22 @@ How I record a soccer game.
   down the side line towards the center of the field, then turn and walk 5 paces away
   from the field.  Set up the tripod.
 - I use a 17 degree downward tilt on the cameras, measured with my phone.
-  the 55 degree camera.
 - On the Brave 7 LE, I configure as follows:
-   - H.265
-   - 1080P30
-   - Turn off auto-shutdown.
-   - Set exposure to auto, and then set EV to -1 as they tend to overexpose.
-   - Set the date stamp to appear on the screen.
-   - Turn on Wifi and connect with the phone app, this syncs the time from the phone
-     to the camera, turn off WiFi.
+   - Swipe Down, Swipe Left, Gear Icon
+      - Reset, if necessary.
+      - Format, if necessary.
+      - Video Encoding: H.265
+      - General Settings:
+         - Turn off auto-shutdown.
+         - Date Stamp: On
+   - Swipe Up
+      - Resolution: 1080P
+      - Frame Rate: 30
+   - Swipe Left
+      - "Auto"
+      - EV: -1.0
+   - Turn on Wifi (tap power button) and connect with the phone app, this syncs the 
+     time from the phone to the camera, turn off WiFi.
    - Set the zoom to 1.8.
       - Zooms up to 2.5 work good on the camera facing the center, but more zoom
         starts to cut off parts of the sideline.

@@ -11,22 +11,28 @@ then
     exit 1
 fi
 
-curl -X POST -H 'Content-Type: application/json' \
-    -H "Authorization: Bearer ${DIGITAL_OCEAN_TOKEN}"
+echo "Creating droplet."
+curl -s -X POST -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer ${DIGITAL_OCEAN_TOKEN}" \
     -d @droplet-spec.json \
     https://api.digitalocean.com/v2/droplets > droplet-info.json
 
 
 new_droplet_id=$(jq .droplet.id droplet-info.json)
 
-curl -X GET \
+echo "Retrieving droplet details."
+curl -s -X GET \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${DIGITAL_OCEAN_TOKEN}" \
     "https://api.digitalocean.com/v2/droplets/${new_droplet_id}" > droplet-details.json
 
+####
+#### NOT IN FILE
+####
 new_droplet_ipv4=$(jq .droplet.networks.v4[].ip_address droplet-details.json)
 new_droplet_ipv6=$(jq .droplet.networks.v6[].ip_address droplet-details.json)
 
+echo "Writing out IP addresses."
 echo "$new_droplet_ipv4" > droplet.ipv4
 echo "$new_droplet_ipv6" > droplet.ipv6
 

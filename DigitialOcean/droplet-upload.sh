@@ -1,22 +1,22 @@
 #!/bin/bash
 
-if [ -z $IPV4ONLY ];
+if [[ -z $IPV4ONLY ]];
 then
-    if [ -f droplet.ipv6 ];
+    if [[ -f droplet.ipv6 ]];
     then
-        ip=$(cat droplet.ipv6)
+        ip="[$(cat droplet.ipv6)]"
     fi
 else
-    if [ -f droplet.ipv4 ];
+    if [[ -f droplet.ipv4 ]];
     then
-        ip=$(cat droplet.ipv6)
+        ip=$(cat droplet.ipv4)
     fi
 fi
 
-if [ -z $ip ];
+if [[ -z $ip ]];
 then
     echo "Unable to determine IP address."
     exit 1
 fi
 
-scp ~/.s3cfg droplet-step* "root@[${6}]:"
+scp ~/.s3cfg droplet-step* "root@${ip}:"

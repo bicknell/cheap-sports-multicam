@@ -1,7 +1,5 @@
 #!/bin/bash
 
-apt-get install -y s3cmd
-
 if [ "$#" -ne 1 ]; then
     echo "Error: directory not specified"
     echo "Usage: $0 <bucket-directory>"

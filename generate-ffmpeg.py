@@ -79,7 +79,7 @@ def collect_mp4_files(base_directory: str) -> list[list[str]]:
 
     # Iterate through items in the base directory to find camera subdirectories
     for item_name in os.listdir(base_directory):
-        item_path: str = os.path.join(base_directory, item_name)
+        item_path: str = os.path.abspath(os.path.join(base_directory, item_name))
 
         # Check if it's a directory and matches the 'cameraX' pattern
         if os.path.isdir(item_path) and item_name.startswith("camera"):
@@ -283,7 +283,7 @@ def construct_stage2(files: list[list[str]], offsets: tuple[int, int, int, int],
     """
     Tile the video in a 2x2 matrix.
     """
-    cmd += '     [scaled0][scaled1][scaled2][scaled3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0:shortest=1,fps=fps=60[outv];" \\\n'
+    cmd += '     [scaled0][scaled1][scaled2][scaled3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0:shortest=1,fps=fps=30[outv];" \\\n'
 
     """
     Send the final video to the output.
@@ -422,7 +422,7 @@ def compute_offsets(frames: list[int]) -> tuple[float, float, float, float]:
     """
     Takes a list of corresponding frames and returns time offsets.
 
-    NOTE: Assumes 60FPS
+    NOTE: Assumes 30FPS
 
     Args:
         frames      list[int] 6 integers indicating the following
@@ -460,7 +460,7 @@ def compute_offsets(frames: list[int]) -> tuple[float, float, float, float]:
         cam1cam3 -= smallest
         cam1cam4 -= smallest
 
-    return (base / 60.0, cam1cam2 / 60.0, cam1cam3 / 60.0, cam1cam4 / 60.0)
+    return (base / 30.0, cam1cam2 / 30.0, cam1cam3 / 30.0, cam1cam4 / 30.0)
 
 if __name__ == "__main__":
     my_name = os.path.basename(sys.argv[0])

@@ -386,13 +386,17 @@ def construct_stage4(directory: str, metadata: Dict[str, str], trim: float) -> s
             cmd += f'-metadata {k}="{v}" '
     cmd += "\\\n"
 
+    cmd += "-movflags faststart \\\n"
+
     """
     Set the output file name.
     """
     cmd += f'{directory}/video_to_trim.mp4\n'
     cmd += '# Trim Video\n'
     cmd += '# Enter time after -ss to trim from the front of the video.\n'
-    cmd += f'ffmpeg -ss {trim:.3f} -i {directory}/video_to_trim.mp4 -c copy {directory}/final_video.mp4\n'
+    cmd += f'ffmpeg -ss {trim:.3f} -i {directory}/video_to_trim.mp4 -ss {trim:.3f} \\\n'
+    cmd += f'-c copy -movflags faststart \\\n'
+    cmd += f'{directory}/final_video.mp4\n'
 
     return cmd
 

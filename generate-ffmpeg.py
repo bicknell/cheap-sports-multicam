@@ -191,7 +191,7 @@ def video_encoding(encode: str) -> str:
             - Other options: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
             - Controls encoding speed, and resulting output file size.  Tweak down
                 on faster / hardware accelerated computers.
-        - -crf 25, aka Constant Rate Factor
+        - -crf 26, aka Constant Rate Factor
             - 18-28 is generally acceptable.
             - Smaller values == larger files and more "quality"
         - H.265 Profile "main"
@@ -204,7 +204,7 @@ def video_encoding(encode: str) -> str:
             - refs=4 Look at 4 frames before and 4 frames after for encoding.
         - Move the moov atom to the start of the file to allow immediate playback when streaming
         """
-        cmd += '-c:v libx265 -preset medium -crf 25 -profile:v main -g 60 -bf 4 -x265-params "ctu_size=64:fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:v libx265 -preset medium -crf 26 -profile:v main -g 60 -bf 4 -x265-params "ctu_size=64:fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
     elif encode == 'H265-nv':
         """
         - -c:v hevc_nvec NVIDA Hardware Accelerated H.265/HEVC

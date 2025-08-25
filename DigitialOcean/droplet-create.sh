@@ -11,12 +11,20 @@ then
     exit 1
 fi
 
+if [[ -z $DIGITAL_OCEAN_TOKEN ]];
+then
+    echo "Must set DIGITAL_OCEAN_TOKEN."
+    exit 1
+fi
+
 echo "Creating droplet."
 curl -s -X POST -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${DIGITAL_OCEAN_TOKEN}" \
     -d @droplet-spec.json \
     https://api.digitalocean.com/v2/droplets > droplet-info.json
 
+echo "Waiting for droplet..."
+sleep 15
 
 new_droplet_id=$(jq .droplet.id droplet-info.json)
 
@@ -29,8 +37,8 @@ curl -s -X GET \
 ####
 #### NOT IN FILE
 ####
-new_droplet_ipv4=$(jq .droplet.networks.v4[].ip_address droplet-details.json)
-new_droplet_ipv6=$(jq .droplet.networks.v6[].ip_address droplet-details.json)
+new_droplet_ipv4=$(jq -r '.droplets[].networks.v4[] | select(.type=="public") | .ip_address' droplet-details.json)
+new_droplet_ipv6=$(jq -r '.droplets[].networks.v6[] | select(.type=="public") | .ip_address' droplet-details.json)
 
 echo "Writing out IP addresses."
 echo "$new_droplet_ipv4" > droplet.ipv4

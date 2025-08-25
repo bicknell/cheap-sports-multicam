@@ -29,6 +29,9 @@ cameras.
 - 2 [Neewer 4M Light Stands](https://www.amazon.com/dp/B0BTL5XYN6), which were one
   of the more affordable ways to get the cameras up in the air.  Getting the cameras
   up makes a HUGE difference.
+- 2 [Mordx Canopy Weights](https://www.amazon.com/dp/B0CZ6JP45B), sandbags to steady
+  the light stands in the wind.  They do not need to be full, I use 4 lbs in each
+  compartment, 8 pounds per tripod leg.  6 can be filled from a 50lb bag.
 - 2 sets of 
   [Neewer 4M Light Stands Dual "GoPro" Mount](https://www.printables.com/model/1387522-neewer-4m-light-stands-dual-gopro-mount)
   brackets.  Designed by me, these allow mounting 2 cameras to a single 4M (13 feet)
@@ -102,7 +105,7 @@ How I record a soccer game.
 - Visualize where the extended 18 yard box line would hit the sideline.  Walk 3 paces
   down the side line towards the center of the field, then turn and walk 5 paces away
   from the field.  Set up the tripod.
-- I use a 17 degree downward tilt on the cameras, measured with my phone.
+- I use a 16 degree downward tilt on the cameras, measured with my phone.
 - On the Brave 7 LE, I configure as follows:
    - Swipe Down, Swipe Left, Gear Icon
       - Reset, if necessary.

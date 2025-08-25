@@ -11,3 +11,10 @@ TEMP_FILE=$(mktemp /tmp/cheap-sports-multicam.XXXXXX)
 ./cheap-sports-multicam/generate-ffmpeg.py $1 $2 $3 $4 $5 $6 $7 > $TEMP_FILE
 
 bash $TEMP_FILE
+
+echo "Alert!  Encoding is finished.!!!"
+for i in {1..10}
+do
+  echo -e "\a"
+  sleep 1
+done

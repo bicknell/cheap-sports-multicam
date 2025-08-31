@@ -5,7 +5,7 @@ This page documents quirks about cameras that may affact the video output.
 ## Akaso Brave 7 LE
 
 1. When the camera rolls over to a new file sometimes the 3rd frame is repeated
-   twice.  Firmware 1.3.D\_T, reported to Akaso.
+   twice.  Firmware 1.3.D\_T, reported to Akaso support 2025-08-30.
 
    Workaround: None at this time, effect is usually minimal.
 

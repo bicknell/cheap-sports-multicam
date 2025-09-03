@@ -122,6 +122,7 @@ How I record a soccer game.
    - Swipe Up
       - Resolution: 1080P
       - Frame Rate: 30
+      - Mode: Loop Mode, 5 Minutes per file
    - Swipe Left
       - "Auto"
       - EV: -1.0

@@ -32,7 +32,7 @@ def load_metadata(directory_path: str) -> Dict[str, str]:
             with open(file_path, 'r', encoding='utf-8') as file:
                 # Use safe_load for security reasons
                 metadata_dict = yaml.safe_load(file)
-            
+
             # Ensure the loaded data is a dictionary. If it's not, return an empty one.
             if isinstance(metadata_dict, dict):
                 # The user requested a dictionary of string to string.
@@ -112,7 +112,7 @@ def collect_mp4_files(base_directory: str) -> list[list[str]]:
     return all_camera_mp4s
 
 
-def construct_stage1(files: list[list[str]], directory: str) -> Tuple[list[list[str]], str]:
+def concatinate_camera_files(files: list[list[str]], directory: str) -> Tuple[list[list[str]], str]:
     """
     Stage 1: Concatinate (if required)
 
@@ -122,7 +122,7 @@ def construct_stage1(files: list[list[str]], directory: str) -> Tuple[list[list[
 
     Args:
         - files     list[list[str]] Per-camera list of a list of filenames
-    
+
     Returns:
         - newfiles  list[list[str]] Per-camera list of a list of filenames after
         - cmd       str The command to generate the concatinated files.
@@ -133,20 +133,54 @@ def construct_stage1(files: list[list[str]], directory: str) -> Tuple[list[list[
         # Do we need to concatinate multiple?
         if len(cam_list) > 1:
             cmd += f"# Stage 1: Concatinate camera {cam+1}\n"
-            fp = tempfile.NamedTemporaryFile(delete=False, delete_on_close=False)
+            fp = tempfile.NamedTemporaryFile(dir=f"{directory}/camera{cam+1}", prefix="filelist-", delete=False, delete_on_close=False)
             for f in cam_list:
                 fp.write(b"file '")
                 fp.write(bytes(f, 'ascii'))
                 fp.write(b"'\n")
             # This is the super-fast way to concatinate
-            cmd += f"ffmpeg -f concat -safe 0 -i {fp.name} -c copy {directory}/camera{cam+1}/combined.mp4\n"
-            newfiles.append([f'{directory}/camera{cam+1}/combined.mp4'])
+            cmd += f"ffmpeg -f concat -safe 0 -i {fp.name} -c copy {directory}/camera{cam+1}/concatinated.mp4\n"
+            newfiles.append([f'{directory}/camera{cam+1}/concatinated.mp4'])
             fp.close()
         else:
+            cmd += f'# Camera {cam+1} had only a single file, no need to concatinate\n'
             newfiles.append(cam_list)
     files = newfiles
 
+    cmd += "\n"
+
     return (files, cmd)
+
+class NoFile(Exception):
+    pass
+
+class ExpectedOneFile(Exception):
+    pass
+
+def align_camera_files(files: list[list[str]], offsets: tuple[int, int, int, int], directory: str) -> Tuple[list[list[str]], str]:
+
+    max_offset = max(offsets)
+    cmd: str = ""
+    newfiles: list[list[str]] = []
+    for cam, cam_list in enumerate(files):
+        # Do we need to concatinate multiple?
+        if len(cam_list) == 0:
+            raise NoFile(f"No file for camera {cam} in list")
+
+        if len(cam_list) > 1:
+            raise ExpectedOneFile("Expected a single file")
+
+        cmd += f"# Stage 2: Align Camera Files {cam+1}\n"
+        trim_time = max_offset - offsets[cam]
+        if trim_time > 0:
+            cmd += f"ffmpeg -ss {trim_time:0.3f} -i {cam_list[0]} -c copy {directory}/camera{cam+1}/combined.mp4\n"
+        else:
+            cmd += f"ffmpeg -i {cam_list[0]} -c copy {directory}/camera{cam+1}/combined.mp4\n"
+        newfiles.append([f'{directory}/camera{cam+1}/combined.mp4'])
+
+    cmd += "\n"
+    return (newfiles, cmd)
+
 
 def video_encoding(encode: str) -> str:
     """
@@ -241,7 +275,7 @@ def video_encoding(encode: str) -> str:
     return cmd
 
 
-def construct_stage2(files: list[list[str]], offsets: tuple[int, int, int, int], directory: str, encode: str) -> str:
+def tiled_video(files: list[list[str]], offsets: tuple[int, int, int, int], directory: str, metadata: Dict[str, str], encode: str) -> str:
     """
     Combines the video from the 4 inputs into a 2x2 matrix.
 
@@ -250,7 +284,7 @@ def construct_stage2(files: list[list[str]], offsets: tuple[int, int, int, int],
     Returns:
 
     """
-    cmd: str = "# Stage 2: Combine video\n"
+    cmd: str = "# Stage 3: Combine\n"
     cmd += "ffmpeg \\\n"
 
     """
@@ -260,7 +294,7 @@ def construct_stage2(files: list[list[str]], offsets: tuple[int, int, int, int],
         # Add -i for each file in the current list
         for f in cam_list:
             cmd += f'-i {f} '
-    
+
         cmd += '\\\n'
 
     """
@@ -278,124 +312,41 @@ def construct_stage2(files: list[list[str]], offsets: tuple[int, int, int, int],
     the previous code made all the delays positive, this code needs them as negative!
     """
     for cam, cam_list in enumerate(files):
-        cmd += f'     [{cam},v]scale=1920x1080,setpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[scaled{cam}]; \\\n'
+        cmd += f'     [{cam},v]fps=fps=30[input{cam}]; \\\n'
 
     """
     Tile the video in a 2x2 matrix.
     """
-    cmd += '     [scaled0][scaled1][scaled2][scaled3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0:shortest=1,fps=fps=30[outv];" \\\n'
+    cmd += '     [input0][input1][input2][input3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0:shortest=1,fps=fps=30[outv]; \\\n'
 
     """
-    Send the final video to the output.
+    Each camera records mono audio, and some have the microphones facing the wrong way.
+    Take camera 2 and camera 4's audio and turn it into a single stereo stream.
     """
-    cmd += '-map "[outv]" \\\n'
+    cmd += '     [1,a]pan=stereo|c0=c0[left]; \\\n'
+    cmd += '     [3,a]pan=stereo|c1=c0[right]; \\\n'
+    cmd += '     [left][right]amerge=inputs=2[aud_mix];" \\\n'
+
     """
-    Generate output parameters
+    Send the final video and audio to the output.
+    """
+    cmd += '-map "[outv]" -map "[aud_mix]" \\\n'
+
+    """
+    Define how the output should be encoded
     """
     cmd += video_encoding(encode)
-    cmd += f'{directory}/combined-video.mp4\n'
+    cmd += '-c:a libfdk_aac -b:a 96k -ar 32000 \\\n'
 
-    return cmd
-
-def construct_stage3(files: list[list[str]], offsets: tuple[int, int, int, int], directory: str, one_audio: bool) -> str:
-    # Stage 3: Combine audio
-    cmd: str = "# Stage 3: Combine audio\n"
-    cmd += "ffmpeg \\\n"
-
-    """
-    ffmpeg wants the input files as a series of -i <filename> arguments.
-    """
-    for n, cam_list in enumerate(files):
-        # Add -i for each file in the current list
-        for f in cam_list:
-            cmd += f'-i {f} '
-    
-        cmd += '\\\n'
-
-    """
-    Construct a filter_complex filter that will combine the video.
-    """
-    cmd += '-filter_complex " \\\n'
-
-    if one_audio:
-        """
-        Output a single stereo stream.
-
-        First output a volume adjustment line for each camera so the user can
-        tweak the volume.
-
-        Second combine the 4 adjusted audio streams into a single stereo stream.
-
-        TODO: The user should be able to specify the volume adjustments at the 
-              CLI or in a config file.
-        """
-        for cam, cam_list in enumerate(files):
-                cmd += f'     [{cam},a]volume=1.0,asetpts=PTS-STARTPTS{offsets[cam]:+.3f}/TB[a{cam}_adj]; \\\n';
-        cmd += '     '
-        for cam, cam_list in enumerate(files):
-            cmd += f'[a{cam}_adj]'
-        # Don't use longest instead of first, it causes it to buffer all the audio in memory.
-        cmd += f'amix=inputs={len(files)}:duration=first:dropout_transition=2[aud_mix];" \\\n';
-        cmd += '-map "[aud_mix]" \\\n'
-    else:
-        """
-        All 4 audio streams individually.
-        """
-        for cam, cam_list in files:
-            if cam > 0:
-                cmd += ' '
-            first = False
-            cmd += f'-map "[a{cam}_adj]"'
-            cam += 1
-        cmd += ' \\\n'
-
-
-    """
-    Audio encoding parameters
-        - -c:a libfdk_aac, aka AAC-LC encoded by libfdk
-        - -b:a, set audio bitrate to 96kbps
-    """
-    cmd += '-c:a libfdk_aac -b:a 96k -ar 48000 \\\n'
-    cmd += f'{directory}/combined-audio.m4a\n'
-
-    return cmd
-
-def construct_stage4(directory: str, metadata: Dict[str, str], trim: float) -> str:
-    """
-    Take the final video and audio files and combine them into a single output file.
-    Set the metadata on the output file.
-
-    Args:
-
-    Returns:
-
-    """
-    cmd: str = "# Stage 4: Final combine\n"
-    cmd += "ffmpeg \\\n"
-    cmd += f'-i {directory}/combined-video.mp4 \\\n'
-    cmd += f'-i {directory}/combined-audio.m4a \\\n'
-    # This is the fast way to copy.
-    cmd += '-c:v copy -c:a copy -map 0:v:0 -map 1:a:0 \\\n'
-
-    # 
     """
     Set Metadata
     """
     for k, v in metadata.items():
         if v is not None and v != '':
-            cmd += f'-metadata {k}="{v}" '
-    cmd += "\\\n"
+            cmd += f'-metadata {k}="{v}" \\\n'
 
     cmd += "-movflags faststart \\\n"
 
-    """
-    Set the output file name.
-    """
-    cmd += f'{directory}/video_to_trim.mp4\n'
-    cmd += '# Trim Video\n'
-    cmd += '# Enter time after -ss to trim from the front of the video.\n'
-    cmd += f'ffmpeg -ss {trim:.3f} -i {directory}/video_to_trim.mp4 -ss {trim:.3f} \\\n'
-    cmd += f'-c copy -movflags faststart \\\n'
     cmd += f'{directory}/final_video.mp4\n'
 
     return cmd
@@ -408,18 +359,20 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[float, float, f
     Build the ffmpeg arguments to process the videos.  I tried doing this all in one stage,
     but it caused far too many memory leaks and slowdowns.
 
-    Stage 1: If there are multiple video files from a camera, concatinate them with fast copy.
-    Stage 2: Combine the video files into a 4x4 tile.
-    Stage 3: Combine the audio files into a 4x4 tile.
-    Stage 4: Combine the resulting audio and video together using fast copy and add the metadata.
+    Steps:
+        1. If there are multiple video files from a camera, concatinate them with fast copy.
+        2. Remove segments from the start of the videos so they all start at the same moment.
+        3. Generate tiled video.
     """
 
-    (files, cmd) = construct_stage1(files, directory)
-    cmd += construct_stage2(files, offsets, directory, encode)
-    cmd += construct_stage3(files, offsets, directory, one_audio)
-    cmd += construct_stage4(directory, metadata, max(offsets))
-   
-    return cmd
+    commands: str = ""
+    (files, cmd) = concatinate_camera_files(files, directory)
+    commands += cmd
+    (files, cmd) = align_camera_files(files, offsets, directory)
+    commands += cmd
+    commands += tiled_video(files, offsets, directory, metadata, encode)
+
+    return commands
 
 
 def compute_offsets(frames: list[int]) -> tuple[float, float, float, float]:

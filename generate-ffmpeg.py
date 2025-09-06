@@ -323,9 +323,7 @@ def tiled_video(files: list[list[str]], offsets: tuple[int, int, int, int], dire
     Each camera records mono audio, and some have the microphones facing the wrong way.
     Take camera 2 and camera 4's audio and turn it into a single stereo stream.
     """
-    cmd += '     [1,a]pan=stereo|c0=c0[left]; \\\n'
-    cmd += '     [3,a]pan=stereo|c1=c0[right]; \\\n'
-    cmd += '     [left][right]amerge=inputs=2[aud_mix];" \\\n'
+    cmd += '     [1,a][3,a]amerge=inputs=2[aud_mix];" \\\n'
 
     """
     Send the final video and audio to the output.

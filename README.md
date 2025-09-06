@@ -16,6 +16,10 @@ My Design Parameters:
 - Programatic post-processing.
 - Get the cameras up in the air for a better view.
 
+***This software should be considered BETA quality at this time.  This is the first season
+I have used it, and frequent improvements are being tested.  Feedback from others is
+welcome.***
+
 ## Bill of Materials
 
 ### Purchased
@@ -97,3 +101,39 @@ tiled together will be 10-14G.  Even on a fast box processing may take 2x-4x rea
 
 See [DigitalOceanVideo](DigitalOceanVideo/) for a workflow to store the files in a Digital
 Ocean Space and process them on a Digitial Ocean Droplet.
+
+## Challenges
+
+These cheap cameras are not time syncronized like professional cameras.  The methods I
+have used to synchronize them above are really only about +-30ms.  Visually it tends to
+be fine, but the audio can be more noticeable.  Additionally, some cameras drop or add
+frames when they roll over to a new file which puts them futher off sync later in the
+video stream.
+
+Here's tips and tricks and works in progress:
+
+- Place cameras on the "team" side of the field, not the "parents" side.  This greatly
+  reduces the chance of a person talking right under the camera and dominating the
+  audio.
+- The current code only uses 2 of the 4 mono microphones, with the main goal to be able
+  to hear a whistle.  It is possible to mix all 4, or only use one.  The quality will
+  depend a lot on the microphones on the camera.
+- Professionals would set up shutgun microphones around the field and record those for
+  the sound.  It would be possible to do a separate audio recording and use that 
+  for the audio track, but it greatly complicates the post-processing.
+- Cameras need enough down-tilt that most of the sky is out of frame.  This helps with
+  exposure, but also gets more of the pixels used for action.
+- When cameras drop frames on file switch it is possible to insert a short buffer, either
+  of the last frame of the previous file repeated or just black to sync up to the other cameras.
+  This hasn't been coded because to do this properly requires fairly complex changes
+  to the fitlergraph, or re-encoding the whole input camera stream.  I'm trying to
+  find a better way.
+- When cameras duplicate frames on file switch it's easier.  The source file can be 
+  -c copy with a -ss 0.5 (skip 0.5 seconds, or 15 frames) to a new file prior to feeding
+  it into the program.
+- Cameras that write timecode, like the GoPro Hero 12/13 should allow syncing the video
+  by that timecode, but I don't know how to do that when tiling video with ffmpeg.
+- Some cameras may exhibit better behavior if the duration of a file is reduced.  Akaso
+  has recommended that "loop mode" set to 5 or 10 minutes is better than letting the
+  camera auto roll over at 25 minutes.  So far that has not been my experience, but
+  I am still working with their support.  Other cameras may be different.

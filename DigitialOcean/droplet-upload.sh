@@ -19,4 +19,18 @@ then
     exit 1
 fi
 
-scp ~/.s3cfg droplet-step* "root@${ip}:"
+FILES=(droplet-step*)
+
+if [[ -f ~/.s3cfg ]]; then
+    FILES+=(~/.s3cfg)
+else
+    echo "~/.s3cfg not found, you must place your credentials manually."
+fi
+
+if [[ -f ~/.client_secrets.json ]]; then
+    FILES+=(~/.client_secrets.json)
+else
+    echo "~/.client_secrets.json not found, you must place your credentials manually."
+fi
+
+scp ${FILES[@]} "root@${ip}:"

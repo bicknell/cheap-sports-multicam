@@ -334,7 +334,7 @@ def tiled_video(files: list[list[str]], offsets: tuple[int, int, int, int], dire
     Define how the output should be encoded
     """
     cmd += video_encoding(encode)
-    cmd += '-c:a libfdk_aac -b:a 96k -ar 32000 \\\n'
+    cmd += '-c:a aac -b:a 96k -ar 32000 \\\n'
 
     """
     Set Metadata

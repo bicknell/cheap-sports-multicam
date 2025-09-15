@@ -33,4 +33,10 @@ else
     echo "~/.client_secrets.json not found, you must place your credentials manually."
 fi
 
+if [[ -f ~/.youtube-upload-credentials.json ]]; then
+    FILES+=(~/.youtube-upload-credentials.json)
+else
+    echo "~/.youtube-upload-credentials.json not found, you must place your credentials manually."
+fi
+
 scp ${FILES[@]} "root@${ip}:"

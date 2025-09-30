@@ -275,7 +275,7 @@ def video_encoding(encode: str) -> str:
     return cmd
 
 
-def tiled_video(files: list[list[str]], offsets: tuple[int, int, int, int], directory: str, metadata: Dict[str, str], encode: str) -> str:
+def tiled_video(files: list[list[str]], offsets: tuple[int, int, int, int], directory: str, metadata: Dict[str, str], encode: str, scale: bool) -> str:
     """
     Combines the video from the 4 inputs into a 2x2 matrix.
 
@@ -312,7 +312,10 @@ def tiled_video(files: list[list[str]], offsets: tuple[int, int, int, int], dire
     the previous code made all the delays positive, this code needs them as negative!
     """
     for cam, cam_list in enumerate(files):
-        cmd += f'     [{cam},v]fps=fps=30[input{cam}]; \\\n'
+        if scale:
+            cmd += f'     [{cam},v]fps=fps=30,scale=1900:1080[input{cam}]; \\\n'
+        else:
+            cmd += f'     [{cam},v]fps=fps=30[input{cam}]; \\\n'
 
     """
     Tile the video in a 2x2 matrix.
@@ -350,7 +353,7 @@ def tiled_video(files: list[list[str]], offsets: tuple[int, int, int, int], dire
     return cmd
 
 
-def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[float, float, float, float], one_audio: bool, directory: str, encode: str, metadata: Dict[str, str]) -> str:
+def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[float, float, float, float], one_audio: bool, directory: str, encode: str, metadata: Dict[str, str], scale: bool) -> str:
     """
     construct_ffmpeg_args
 
@@ -368,7 +371,7 @@ def construct_ffmpeg_args(files: list[list[str]], offsets: tuple[float, float, f
     commands += cmd
     (files, cmd) = align_camera_files(files, offsets, directory)
     commands += cmd
-    commands += tiled_video(files, offsets, directory, metadata, encode)
+    commands += tiled_video(files, offsets, directory, metadata, encode, scale)
 
     return commands
 
@@ -448,6 +451,11 @@ If the frames are omitted they are all treated as zero.
         epilog=f"Example: {my_name} /path/to/directory 67 102 87 95 124 87",
     )
     parser.add_argument(
+        "-s", "--scale",
+        action='store_true',
+        help="Scale input video, use if input video is not 1920x1080.",
+    )
+    parser.add_argument(
         "directory",
         type=str,
         help="The base directory to search for 'cameraX' subdirectories."
@@ -481,5 +489,5 @@ If the frames are omitted they are all treated as zero.
     metadata = load_metadata(input_directory)
 
     if all_camera_mp4s:
-        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory, "H265", metadata)
+        command = construct_ffmpeg_args(all_camera_mp4s, offsets, True, input_directory, "H265", metadata, args.scale)
         print(command)

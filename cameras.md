@@ -7,6 +7,17 @@ to be added to this page.
 
 ## Akaso Brave 7 LE
 
+The Akaso Brave 7 LE is *NO LONGER RECOMMENDED*.
+
+This camera has a hardware bug that Akaso has been unable to fix.  When a file
+rolls over due to size limits or due to loop mode being set there will be 
+approximately 15 frames saved in both the previous and subsequent files.  This
+is extremely annoying when trying to combine the files back together as it only
+happens about 50% of the time.  The result is that the video gets out of sync
+with the other cameras.
+
+Historical information about the Brave 7 LE below.
+
 Pro:
    - Inexpensive, can usually be found on sale for around $120 or bundled with
      an SD card for a few dollars more.

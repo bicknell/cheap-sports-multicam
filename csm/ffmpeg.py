@@ -74,6 +74,50 @@ def run(argv: list[str]) -> subprocess.CompletedProcess:
     return result
 
 
+@dataclass
+class Capabilities:
+    version_ok: bool
+    has_libx265: bool
+    has_libsvtav1: bool
+    has_libvmaf: bool
+    has_hevc_videotoolbox: bool
+    videotoolbox_accepts_qv: bool
+
+
+def check_capabilities(tool: Tool) -> Capabilities:
+    """Probe optional pieces so features degrade with a message instead of a
+    filtergraph parse error 40 minutes into a render (Sec 10.1)."""
+    encoders = subprocess.run(
+        [tool.ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True
+    ).stdout
+    filters = subprocess.run(
+        [tool.ffmpeg, "-hide_banner", "-filters"], capture_output=True, text=True
+    ).stdout
+    has_hevc_videotoolbox = "hevc_videotoolbox" in encoders
+
+    videotoolbox_accepts_qv = False
+    if has_hevc_videotoolbox:
+        probe = subprocess.run(
+            [
+                tool.ffmpeg, "-hide_banner", "-v", "error",
+                "-f", "lavfi", "-i", "color=c=black:s=16x16:d=0.1",
+                "-c:v", "hevc_videotoolbox", "-q:v", "50", "-frames:v", "1",
+                "-f", "null", "-",
+            ],
+            capture_output=True, text=True,
+        )
+        videotoolbox_accepts_qv = probe.returncode == 0
+
+    return Capabilities(
+        version_ok=tool.version >= MIN_VERSION,
+        has_libx265="libx265" in encoders,
+        has_libsvtav1="libsvtav1" in encoders,
+        has_libvmaf="libvmaf" in filters,
+        has_hevc_videotoolbox=has_hevc_videotoolbox,
+        videotoolbox_accepts_qv=videotoolbox_accepts_qv,
+    )
+
+
 def dry_run_script(argv_list: list[list[str]]) -> str:
     """Render a list of commands as a `set -euo pipefail` shell script.
     shlex.join() only ever produces text for a human to read here --

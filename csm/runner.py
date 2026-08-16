@@ -24,12 +24,11 @@ def _input_args(ref: InputRef, tmpdir: Path, index: int) -> list[str]:
     if ref.kind == "concat":
         list_file = tmpdir / f"input{index}.txt"
         list_file.write_text("".join(_concat_list_line(p) for p in ref.clips))
-        args = []
-        if ref.seek > 0:
-            args += ["-ss", f"{ref.seek:.6f}"]
-        args += ["-f", "concat", "-safe", "0", "-protocol_whitelist", "file",
-                  "-i", str(list_file)]
-        return args
+        # No -ss here: head-trim happens in-graph (filtergraph.py's
+        # trim=start=.../atrim=start=...), not via input seek. See the
+        # comment there for why.
+        return ["-f", "concat", "-safe", "0", "-protocol_whitelist", "file",
+                 "-i", str(list_file)]
     if ref.kind == "color":
         spec = (
             f"color=c={ref.color}:s={ref.width}x{ref.height}:"
@@ -49,6 +48,8 @@ def build_argv(tool: Tool, job: FfmpegJob, tmpdir: Path) -> list[str]:
         argv += _input_args(ref, tmpdir, i)
     argv += ["-filter_complex", job.graph.filter_complex]
     argv += ["-map", f"[{job.graph.video_out_label}]", "-map", f"[{job.graph.audio_out_label}]"]
+    for key, value in job.metadata.items():
+        argv += ["-metadata", f"{key}={value}"]
     argv += job.output_args
     argv += [str(job.output_path)]
     return argv

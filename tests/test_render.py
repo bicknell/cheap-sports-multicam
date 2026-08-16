@@ -97,14 +97,15 @@ def test_timeline_fragments():
 
     cam1_ref = graph.inputs[0]
     assert cam1_ref.kind == "concat"
-    assert cam1_ref.seek == pytest.approx(2.0)
     cam1_chain = next(c for c in graph.filter_complex.split(";") if "[v1]" in c)
+    assert "trim=start=2.000000" in cam1_chain
+    assert "setpts=PTS-STARTPTS" in cam1_chain
     assert "tpad=start_duration" not in cam1_chain
     assert "tpad=stop_duration" not in cam1_chain
 
     cam2_ref = graph.inputs[1]
-    assert cam2_ref.seek == 0.0
     cam2_chain = next(c for c in graph.filter_complex.split(";") if c.endswith("[v2]"))
+    assert "trim=start" not in cam2_chain
     assert "tpad=start_duration=2.000000:color=black" in cam2_chain
 
     cam3_chain = next(c for c in graph.filter_complex.split(";") if c.endswith("[v3]"))
@@ -229,6 +230,25 @@ def test_render_color_range(tool, tmp_path):
     luma_10bit = struct.unpack_from("<H", result.stdout, 0)[0]
     luma_8bit_equiv = luma_10bit / 4
     assert 228 <= luma_8bit_equiv <= 240
+
+
+@pytest.mark.slow
+def test_render_head_trim(tool, synthetic_game, tmp_path):
+    """Regression: -ss on a concat-demuxer input silently dropped all
+    video when the source had audio (verified against real ffmpeg while
+    building Sec 9.2's preview -- test 10 only checked the filtergraph
+    string, never a real render of the head>0 trim case). Fixed by
+    trimming in-graph (trim=start=.../atrim=start=...) instead of seeking
+    the concat input."""
+    game = synthetic_game({1: -2.0, 2: 0.0, 3: 0.0, 4: 0.0},
+                           {1: 8.0, 2: 6.0, 3: 6.0, 4: 6.0})
+    output, tl = _render(tool, game, {1: -2.0, 2: 0.0, 3: 0.0, 4: 0.0}, tmp_path)
+    data = _ffprobe_json(output)
+    vstream = next(s for s in data["streams"] if s["codec_type"] == "video")
+    astream = next(s for s in data["streams"] if s["codec_type"] == "audio")
+    assert int(vstream["nb_frames"]) > 0
+    assert astream["channels"] == 2
+    assert abs(float(data["format"]["duration"]) - 6.0) < (1 / 30) * 2
 
 
 @pytest.mark.slow

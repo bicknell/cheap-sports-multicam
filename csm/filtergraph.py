@@ -19,7 +19,6 @@ class InputRef:
     kind: str            # "concat" | "color" | "anullsrc"
     label: str            # e.g. "cam1"; for humans / dry-run only
     clips: tuple[Path, ...] = ()
-    seek: float = 0.0     # -ss before -i, only for kind == "concat"
     duration: float | None = None   # -t after -i, only for lavfi sources
     width: int = 0
     height: int = 0
@@ -50,10 +49,17 @@ def _video_chain(idx: int, track: Track, timeline: Timeline) -> tuple[InputRef |
         return ref, chain
 
     head, tail = head_tail(timeline, track)
-    ref = InputRef(kind="concat", label=f"cam{track.cam}", clips=tuple(track.clips),
-                    seek=max(head, 0.0))
+    ref = InputRef(kind="concat", label=f"cam{track.cam}", clips=tuple(track.clips))
 
     ops: list[str] = []
+    if head > 0:
+        # `-ss` before a concat-demuxer `-i` is unreliable when the source
+        # has audio (verified: fails outright, even for tiny offsets, on
+        # ffmpeg 9.0.1 -- silent empty output, exit code 0). Trim in-graph
+        # instead: decode from the start and cut here. Frame-accurate and
+        # matches the verified-safe pattern in Sec 3.4.
+        ops.append(f"trim=start={head:.6f}")
+        ops.append("setpts=PTS-STARTPTS")
     if (track.width, track.height) != (tw, th):
         ops.append(
             f"scale={tw}:{th}:force_original_aspect_ratio=decrease:"
@@ -86,10 +92,13 @@ def _audio_chain(idx: int, track: Track, timeline: Timeline) -> tuple[InputRef |
         return ref, chain
 
     head, tail = head_tail(timeline, track)
-    ref = InputRef(kind="concat", label=f"cam{track.cam}", clips=tuple(track.clips),
-                    seek=max(head, 0.0))
+    ref = InputRef(kind="concat", label=f"cam{track.cam}", clips=tuple(track.clips))
 
-    ops = ["aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=mono"]
+    ops: list[str] = []
+    if head > 0:
+        ops.append(f"atrim=start={head:.6f}")
+        ops.append("asetpts=PTS-STARTPTS")
+    ops.append("aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=mono")
     if head < 0:
         ops.append(f"adelay=delays={-head * 1000:.3f}:all=1")
     if tail > 0:

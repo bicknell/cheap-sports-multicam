@@ -50,8 +50,40 @@ def _final_h265_args(timeline: Timeline) -> list[str]:
 
 FINAL_H265 = EncoderProfile(name="final-h265", build_args=_final_h265_args)
 
+
+def _preview_common_args(timeline: Timeline) -> list[str]:
+    duration = timeline.duration + 0.5 / float(timeline.fps)
+    return [
+        "-tag:v", "hvc1",
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",
+        "-t", f"{duration:.6f}",
+    ]
+
+
+def _preview_videotoolbox_args(timeline: Timeline) -> list[str]:
+    # No constant-quality mode on Intel/T2 (Sec 3.4: hevc_videotoolbox
+    # rejects -q:v there), so preview uses a fixed ABR bitrate -- fine for a
+    # throwaway sync check, not meant to be judged on quality.
+    return ["-c:v", "hevc_videotoolbox", "-b:v", "20000k"] + _preview_common_args(timeline)
+
+
+def _preview_x265_args(timeline: Timeline) -> list[str]:
+    return (
+        ["-c:v", "libx265", "-preset", "veryfast", "-crf", "23"]
+        + _preview_common_args(timeline)
+    )
+
+
+PREVIEW_VIDEOTOOLBOX = EncoderProfile(
+    name="preview-videotoolbox", build_args=_preview_videotoolbox_args
+)
+PREVIEW_X265 = EncoderProfile(name="preview-x265", build_args=_preview_x265_args)
+
 PROFILES: dict[str, EncoderProfile] = {
     FINAL_H265.name: FINAL_H265,
+    PREVIEW_VIDEOTOOLBOX.name: PREVIEW_VIDEOTOOLBOX,
+    PREVIEW_X265.name: PREVIEW_X265,
 }
 
 
@@ -60,3 +92,49 @@ def get_profile(name: str) -> EncoderProfile:
         return PROFILES[name]
     except KeyError:
         raise ValueError(f"unknown encoder profile: {name!r} (available: {sorted(PROFILES)})")
+
+
+SWEEP_ENCODERS = ("libx265", "libsvtav1")
+
+
+def sweep_args(
+    timeline: Timeline, *, encoder: str = "libx265", crf: str = "23", preset: str = "medium",
+) -> list[str]:
+    """Sec 7.3: `--sweep encoder=...,crf=...,preset=...` -- variant output
+    args built the same shape as the real profiles above, so measured
+    numbers transfer directly to a real EncoderProfile."""
+    duration = timeline.duration + 0.5 / float(timeline.fps)
+    if encoder == "libsvtav1":
+        gop = 4 * round(float(timeline.fps))
+        video = [
+            "-c:v", "libsvtav1", "-preset", preset, "-crf", crf,
+            "-pix_fmt", "yuv420p10le",
+            "-svtav1-params", f"keyint={gop}:scd=0",
+            "-tag:v", "av01",
+        ]
+    elif encoder == "libx265":
+        gop = 2 * round(float(timeline.fps))
+        video = [
+            "-c:v", "libx265", "-preset", preset, "-crf", crf,
+            "-pix_fmt", "yuv420p10le", "-profile:v", "main10",
+            "-x265-params", f"keyint={gop}:min-keyint={gop}:no-open-gop=1:repeat-headers=1",
+            "-tag:v", "hvc1",
+        ]
+    else:
+        raise ValueError(f"unknown sweep encoder: {encoder!r} (available: {SWEEP_ENCODERS})")
+    return video + [
+        "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
+        "-movflags", "+faststart",
+        "-t", f"{duration:.6f}",
+    ]
+
+
+def resolve_preview_profile(name: str, capabilities) -> EncoderProfile:
+    """Sec 7.5: `--preview-encoder auto|NAME` -- auto picks
+    hevc_videotoolbox when available (fast, macOS-only), else
+    libx265 -preset veryfast."""
+    if name != "auto":
+        return get_profile(name)
+    if capabilities.has_hevc_videotoolbox:
+        return PREVIEW_VIDEOTOOLBOX
+    return PREVIEW_X265

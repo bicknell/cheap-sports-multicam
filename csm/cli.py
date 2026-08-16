@@ -8,7 +8,7 @@ import warnings
 from fractions import Fraction
 from pathlib import Path
 
-from csm import encoders, ffmpeg, plan, probe, runner, sources, sync
+from csm import encoders, ffmpeg, plan, preview as preview_mod, probe, runner, sources, sweep, sync
 from csm import timeline as timeline_mod
 
 
@@ -170,19 +170,18 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_render(args: argparse.Namespace) -> int:
-    tool = ffmpeg.locate(args.ffmpeg_path, args.ffprobe_path)
-    cameras = sources.discover_cameras(args.gamedir)
-    infos = {cam: probe.probe_camera(tool, camera)
-             for cam, camera in cameras.items() if camera.present}
-
+def _build_timeline(
+    args: argparse.Namespace, tool, infos: dict[int, probe.CameraInfo]
+) -> timeline_mod.Timeline | None:
+    """Shared by cmd_render and cmd_preview: sync.yaml + overrides ->
+    Timeline. Prints an `error:` line and returns None on failure."""
     sync_file = args.sync_file or (args.gamedir / "sync.yaml")
     if not sync_file.exists():
         print(
             f"error: {sync_file} not found -- run `csm sync {args.gamedir} --write` first",
             file=sys.stderr,
         )
-        return 1
+        return None
     data = sync.read_sync_yaml(sync_file)
     offsets = sync.offsets_from_sync_yaml(data)
 
@@ -195,24 +194,45 @@ def cmd_render(args: argparse.Namespace) -> int:
         out_w, out_h = _parse_out_size(args.out_size, infos)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
-        return 1
+        return None
 
     audio_cams = _parse_audio_cams(args.audio_cams)
     fps = Fraction(args.fps).limit_denominator(100000)
 
     try:
-        tl = timeline_mod.build_timeline(
+        return timeline_mod.build_timeline(
             infos, offsets, out_w=out_w, out_h=out_h, fps=fps, audio_cams=audio_cams,
             align_start=args.align_start, align_end=args.align_end,
             start=args.start, end=args.end, duration=args.duration,
         )
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
+        return None
+
+
+def _load_metadata(gamedir: Path) -> dict[str, str]:
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        metadata = sources.load_metadata(gamedir)
+        for w in caught:
+            print(f"warning: {w.message}", file=sys.stderr)
+    return metadata
+
+
+def cmd_render(args: argparse.Namespace) -> int:
+    tool = ffmpeg.locate(args.ffmpeg_path, args.ffprobe_path)
+    cameras = sources.discover_cameras(args.gamedir)
+    infos = {cam: probe.probe_camera(tool, camera)
+             for cam, camera in cameras.items() if camera.present}
+
+    tl = _build_timeline(args, tool, infos)
+    if tl is None:
         return 1
 
     profile = encoders.get_profile(args.profile)
     output_path = args.output or (args.gamedir / "final_video.mp4")
-    jobs = plan.build_plan(tl, profile, output_path)
+    metadata = _load_metadata(args.gamedir)
+    jobs = plan.build_plan(tl, profile, output_path, metadata=metadata)
 
     if args.dry_run:
         work_dir = args.work_dir or (args.gamedir / ".csm")
@@ -223,6 +243,51 @@ def cmd_render(args: argparse.Namespace) -> int:
     for job in jobs:
         runner.run_job(tool, job, work_dir=args.work_dir)
     print(f"wrote {output_path}")
+    return 0
+
+
+def cmd_preview(args: argparse.Namespace) -> int:
+    tool = ffmpeg.locate(args.ffmpeg_path, args.ffprobe_path)
+    cameras = sources.discover_cameras(args.gamedir)
+    infos = {cam: probe.probe_camera(tool, camera)
+             for cam, camera in cameras.items() if camera.present}
+
+    tl = _build_timeline(args, tool, infos)
+    if tl is None:
+        return 1
+
+    capabilities = ffmpeg.check_capabilities(tool)
+    metadata = _load_metadata(args.gamedir)
+    output_dir = args.output or (args.gamedir / ".csm" / "preview")
+    preview_at = args.preview_at or ["middle"]
+
+    if args.sweep:
+        results = sweep.run_sweep(
+            tool, capabilities, tl, args.sweep,
+            at=preview_at, seconds=args.preview_seconds, output_dir=output_dir,
+        )
+        print(sweep.format_results(results))
+        return 0
+
+    try:
+        profile = encoders.resolve_preview_profile(args.preview_encoder, capabilities)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    windows = preview_mod.resolve_windows(
+        tl, preview_at, args.preview_seconds, include_all_live=True,
+    )
+    jobs = preview_mod.build_preview_plan(tl, profile, output_dir, windows=windows, metadata=metadata)
+
+    if args.dry_run:
+        work_dir = args.work_dir or (args.gamedir / ".csm")
+        for job in jobs:
+            print(runner.dry_run(tool, job, work_dir))
+        return 0
+
+    for job in jobs:
+        runner.run_job(tool, job, work_dir=args.work_dir)
+        print(f"wrote {job.output_path}")
     return 0
 
 
@@ -274,6 +339,36 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--work-dir", type=Path, default=None)
     p_render.add_argument("--dry-run", action="store_true")
     p_render.set_defaults(func=cmd_render)
+
+    p_preview = sub.add_parser("preview", help="Render a short preview window, or sweep encoder settings")
+    _add_common_args(p_preview)
+    p_preview.add_argument("--sync-file", type=Path, default=None)
+    p_preview.add_argument("--offset", action="append", metavar="N=SEC")
+    p_preview.add_argument("--offset-frames", action="append", metavar="N=F")
+    p_preview.add_argument("--nudge", action="append", metavar="N=+-SEC")
+    p_preview.add_argument("--align-start", choices=("latest", "earliest"), default="latest")
+    p_preview.add_argument("--align-end", choices=("longest", "shortest"), default="longest")
+    p_preview.add_argument("--start", type=float, default=None)
+    p_preview.add_argument("--end", type=float, default=None)
+    p_preview.add_argument("--duration", type=float, default=None)
+    p_preview.add_argument("--fps", type=float, default=30.0)
+    p_preview.add_argument("--audio-cams", default="2,4")
+    p_preview.add_argument("--out-size", default="3840x2160", help="WxH, or 'native'")
+    p_preview.add_argument("--preview-seconds", type=float, default=60.0)
+    p_preview.add_argument(
+        "--preview-at", action="append", metavar="middle|MM:SS|PCT",
+        help="Repeatable; default is 'middle' plus an automatic window at the first "
+             "moment all four cameras are live",
+    )
+    p_preview.add_argument("--preview-encoder", default="auto", metavar="auto|NAME")
+    p_preview.add_argument(
+        "--sweep", action="append", metavar="KEY=v1,v2,...",
+        help="Repeatable; e.g. --sweep crf=21,23,25 --sweep preset=fast,medium",
+    )
+    p_preview.add_argument("--output", type=Path, default=None, help="Output directory")
+    p_preview.add_argument("--work-dir", type=Path, default=None)
+    p_preview.add_argument("--dry-run", action="store_true")
+    p_preview.set_defaults(func=cmd_preview)
 
     return parser
 

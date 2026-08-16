@@ -217,7 +217,7 @@ def video_encoding(encode: str) -> str:
             - I'm told 2 should work everywhere, and more may not work with some players.
         - Move the moov atom to the start of the file to allow immediate playback when streaming
         """
-        cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 -movflags faststart \\\n'
+        cmd += '-c:v libx264 -preset veryfast -crf 21 -refs 4 -profile:v high -g 60 -bf 2 \\\n'
     elif encode == 'H265':
         """
         - -c:v libx265, aka H.265/HEVC
@@ -238,7 +238,7 @@ def video_encoding(encode: str) -> str:
             - refs=4 Look at 4 frames before and 4 frames after for encoding.
         - Move the moov atom to the start of the file to allow immediate playback when streaming
         """
-        cmd += '-c:v libx265 -preset medium -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:v libx265 -preset medium -crf 26 -profile:v main -g 60 -bf 4 -x265-params "fast-intra=1:no-open-gop=1:ref=4" -tag:v hvc1 \\\n'
     elif encode == 'H265-nv':
         """
         - -c:v hevc_nvec NVIDA Hardware Accelerated H.265/HEVC
@@ -248,13 +248,13 @@ def video_encoding(encode: str) -> str:
             - Other options:
         - -strict-gop 1 same as no-opengop=1
         """
-        cmd += '-c:v hevc_nvenc -preset p4 -cq:v 28 -profile:v main -strict_gop 1 -rgb_mode yuv420 -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:v hevc_nvenc -preset p4 -cq:v 28 -profile:v main -strict_gop 1 -rgb_mode yuv420 -tag:v hvc1 \\\n'
     elif encode == 'videotoolbox':
         """
         - -c:v hevc_videotoolbox Apple's accelerated H.265/HVEC
         - -b:v Set the bit-rate of the video.
         """
-        cmd += '-c:v hevc_videotoolbox -b:v 35000K -tag:v hvc1 -movflags faststart \\\n'
+        cmd += '-c:v hevc_videotoolbox -b:v 35000K -tag:v hvc1 \\\n'
     else:
         """
         A low quality but very fast catchall.
@@ -313,7 +313,7 @@ def tiled_video(files: list[list[str]], offsets: tuple[int, int, int, int], dire
     """
     for cam, cam_list in enumerate(files):
         if scale:
-            cmd += f'     [{cam},v]fps=fps=30,scale=1900:1080[input{cam}]; \\\n'
+            cmd += f'     [{cam},v]fps=fps=30,scale=1920:1080[input{cam}]; \\\n'
         else:
             cmd += f'     [{cam},v]fps=fps=30[input{cam}]; \\\n'
 

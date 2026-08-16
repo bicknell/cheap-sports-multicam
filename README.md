@@ -87,8 +87,13 @@ the necessary ffmpeg command lines to perform the processing.
 1. Run [generate-ffmpeg.py](generate-ffmpeg.py):
 
    ```
-   generate-ffmpeg.py /Path/to/GAMEDIR f1 f2 f3 f4 f5 f6 > /tmp/runme.sh
+   generate-ffmpeg.py -s /Path/to/GAMEDIR f1 f2 f3 f4 f5 f6 > /tmp/runme.sh
    ```
+
+   **The `-s`/`--scale` flag is currently required for every game.** The cameras record at
+   2720x1530, not 1920x1080, so without `-s` the tiled output is 5440x3060 (double the
+   pixels of 4K) instead of the intended 3840x2160 — roughly doubling both encode time and
+   file size for detail that doesn't survive YouTube's re-encode.
 
    A command line will be generated into /tmnp/runme.sh.  Inspect the script, and if necessary
    modify the results for any custom processing you need to do on a specific game.

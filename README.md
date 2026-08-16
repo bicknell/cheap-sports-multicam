@@ -26,7 +26,7 @@ welcome.***
 
 - 4 Action Cameras.  I am currently using 
   [Akaso Brave 7 LE](https://www.akasotech.com/support/Brave-7-LE) cameras.
-  **Please read** [cameras.md](cameras.md) before purchasing cameras.
+  **Please read** [docs/cameras.md](docs/cameras.md) before purchasing cameras.
   - The parts are built around a "GoPro" style mount, so pretty much any action cam
     should work.
 - 2 [Neewer 4M Light Stands](https://www.amazon.com/dp/B0BTL5XYN6), which were one
@@ -64,7 +64,7 @@ the necessary ffmpeg command lines to perform the processing.
 ## My Workflow
 
 1. Record the game.  Tips/tricks/experiences with specific sports:
-   - [Soccer](soccer.md)
+   - [Soccer](docs/soccer.md)
 1. Create a directory referenced as `GAMEDIR` for the rest of this document.  Create 4
    subdirectories under `GAMEDIR` called `camera1`, `camera2`, `camera3`, and `camera4`.
    Copy the footage from each camera to each directory.  They will be tiled like this:
@@ -84,10 +84,10 @@ the necessary ffmpeg command lines to perform the processing.
 1. **Optional:** To add metadata, create a file called `GAMEDIR/metadata.yaml`.  Each
    line should be a string to string mapping of a value in the
    [Public Metadata API](https://ffmpeg.org/doxygen/7.0/group__metadata__api.html)
-1. Run [generate-ffmpeg.py](generate-ffmpeg.py):
+1. Run [legacy/generate-ffmpeg.py](legacy/generate-ffmpeg.py):
 
    ```
-   generate-ffmpeg.py -s /Path/to/GAMEDIR f1 f2 f3 f4 f5 f6 > /tmp/runme.sh
+   legacy/generate-ffmpeg.py -s /Path/to/GAMEDIR f1 f2 f3 f4 f5 f6 > /tmp/runme.sh
    ```
 
    **The `-s`/`--scale` flag is currently required for every game.** The cameras record at

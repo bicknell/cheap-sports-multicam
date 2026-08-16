@@ -1,3 +1,11 @@
 filelist-*
 concatinated.mp4
 combined.mp4
+
+# csm Python project
+.venv/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+sync.yaml

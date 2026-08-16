@@ -447,6 +447,14 @@ in sync between the videos, for example:
    camera3 frame 124 is in sync with camera4 frame 87
 
 If the frames are omitted they are all treated as zero.
+
+Alternatively, pass --offsets-seconds with the four offsets `csm sync`
+already computed (its offsets are relative to camera 1 in seconds, same
+convention this script uses internally), skipping the frame-number step
+entirely:
+
+   csm sync /path/to/directory
+   {my_name} /path/to/directory --offsets-seconds 0,1.6,701.4,698.867
 """,
         epilog=f"Example: {my_name} /path/to/directory 67 102 87 95 124 87",
     )
@@ -454,6 +462,15 @@ If the frames are omitted they are all treated as zero.
         "-s", "--scale",
         action='store_true',
         help="Scale input video, use if input video is not 1920x1080.",
+    )
+    parser.add_argument(
+        "--offsets-seconds",
+        type=str,
+        default=None,
+        metavar="CAM1,CAM2,CAM3,CAM4",
+        help="Four comma-separated per-camera offsets in seconds, relative to "
+             "camera 1 (as produced by `csm sync`). Overrides the frame-number "
+             "arguments below.",
     )
     parser.add_argument(
         "directory",
@@ -481,7 +498,18 @@ If the frames are omitted they are all treated as zero.
         print(f"Directory {input_directory} does not exist.")
         sys.exit(1)
 
-    offsets = compute_offsets(args.frame)
+    if args.offsets_seconds is not None:
+        parts = args.offsets_seconds.split(",")
+        if len(parts) != 4:
+            print("--offsets-seconds needs exactly 4 comma-separated values (cam1,cam2,cam3,cam4).")
+            sys.exit(1)
+        try:
+            offsets = tuple(float(p) for p in parts)
+        except ValueError:
+            print(f"--offsets-seconds values must be numbers, got: {args.offsets_seconds}")
+            sys.exit(1)
+    else:
+        offsets = compute_offsets(args.frame)
 
     # Call the function to collect files
     # The return type is now list[list[str]]

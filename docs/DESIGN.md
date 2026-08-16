@@ -1,6 +1,6 @@
 # Design: rewriting the multicam pipeline
 
-**Status:** approved, Phases 0-2 done. Written 2026-08-15; scope trimmed
+**Status:** approved, Phases 0-3 done. Written 2026-08-15; scope trimmed
 2026-08-16 — chunked encoding, `final-av1`/`draft-vt`, envelope cross-correlation, automatic
 clap-detection, and full droplet automation moved to conditional TODOs (§13) or later phases
 (§15), and the sync design gained an explicit validate-before-building gate (§6.0). Nothing
@@ -8,7 +8,10 @@ below was deleted, only deferred; search for "deferred" to find every cut. Phase
 `main` 2026-08-16 (`b98736b`). Phase 1 (the §6.0 spike, `csm probe`/`csm sync`, GCC-PHAT,
 topology solve, `sync.yaml`) landed on `csm-rewrite` 2026-08-16 (`acc8980`). Phase 2
 (`timeline`/`filtergraph`/`plan`/`runner`, `csm render`, single ffmpeg job, 4K default,
-color-range fix) landed on `csm-rewrite` 2026-08-16 (`5d60742`); Phase 3 is next.
+color-range fix) landed on `csm-rewrite` 2026-08-16 (`5d60742`). Phase 3 (`csm preview`,
+`--sweep`, metadata embedding, `check_capabilities()`, and a fix for a real concat-demuxer
+seek bug found while testing) landed on `csm-rewrite` 2026-08-16 (`6b80188`); Phase 4 is
+next.
 **Implementation happens on a branch; `main` stays usable all season.**
 
 This document is meant to be executable by someone — or something — with no memory of the
@@ -834,7 +837,7 @@ the docs; revisit only on Apple Silicon.
 Treat the host as a capability set so the upgrade is a config change, not a rewrite.
 `csm/host.py` returns a `HostProfile` — `arch`, `perf_cores`, `total_cores`, `ram_gb`,
 `has_videotoolbox`, `videotoolbox_cq` (**probed, not assumed from arch**), `has_libsvtav1`,
-`has_libvmaf`, `has_drawtext` — and defaults derive from it.
+`has_libvmaf` — and defaults derive from it.
 
 What actually changes:
 
@@ -888,10 +891,10 @@ Default `--preview-at middle`, plus an automatic second window at the first mome
 cameras are live, where a sync error is most visible. Expected wall time: ~43 s with
 `hevc_videotoolbox`, 60–90 s with `libx265 -preset veryfast`.
 
-Since `drawtext` is unavailable in stock builds, quadrant identification uses
-`--preview-marks` — a distinctly colored 8 px `drawbox` border per quadrant — plus the
-offsets in the preview mp4's `comment` tag. Probe for `drawtext` as a capability and use
-real labels when present.
+No quadrant marking needed: the cameras already burn in a name and date overlay in
+hardware, and since the four cameras point in four different directions at the field, a
+misplaced or wrong-angle quadrant is obvious on sight. `drawtext`/`drawbox` overlays were
+considered and dropped as unnecessary.
 
 This converts "wait hours to discover the sync is a frame off" into "check in 45 seconds,"
 and is worth more than any encoder tuning.
@@ -910,7 +913,7 @@ and is worth more than any encoder tuning.
   exit code, the last 40 stderr lines, and `shlex.join(argv)` — so when it breaks you get
   the exact failing command back to paste into a terminal.
 - `ffmpeg.check_capabilities()` at startup: version gate (≥ 7.0), `libx265` present, and
-  probe the optional pieces (`drawtext`, `libsvtav1`, `libvmaf`, `hevc_videotoolbox`, and
+  probe the optional pieces (`libsvtav1`, `libvmaf`, `hevc_videotoolbox`, and
   whether VideoToolbox accepts `-q:v`) so features degrade with a message instead of a
   filtergraph parse error 40 minutes into a render. This is what catches "the droplet's
   ffmpeg is different from mine."
@@ -1035,7 +1038,7 @@ Encode    --profile {final-h265,preview}
           --x265-param K=V (repeatable)  --scaler {bicubic,lanczos,spline}
 Run       --output PATH  --work-dir PATH
 Preview   --preview  --preview-seconds 60  --preview-at middle|MM:SS|PCT (repeatable)
-          --preview-encoder auto|NAME  --preview-marks
+          --preview-encoder auto|NAME
           --sweep KEY=v1,v2,... (repeatable)
 ```
 
@@ -1386,7 +1389,7 @@ replacement has been validated on real footage.
 | **0** — on `main`, same day — **done** (`b98736b`) | Freeze `legacy/generate-ffmpeg.py`. Fix `scale=1900:1080` → `1920:1080` and the duplicated `-movflags faststart`. Add `.gitignore` for `filelist-*`, `concatinated.mp4`, `combined.mp4`. Document that `-s` must be passed, since 5.4K output is happening on every game today. | —             |
 | **1** — headline feature, zero render risk — **done** (`acc8980`) | **Spike first (§6.0):** raw GCC-PHAT against the two archived games, checked against ground truth. Only if that validates, build `csm probe` + `csm sync` (PHAT-only, creation-time hint, weighted-solve topology, manual `--clap-at`) and confirm against the same two games. Writes `sync.yaml`; add an `--offsets-seconds` entry point to the legacy script so it consumes them. Frame-hunting stops immediately; the render path is untouched. If the spike doesn't validate, stop here — manual sync continues and the rest of this phase isn't built. | 1–9           |
 | **2** — new pipeline, single process — **done** (`5d60742`) | `timeline`/`filtergraph`/`plan`/`runner`, one ffmpeg job, both intermediate passes deleted, 4K default, color-range fix, missing/short cameras working, `final-h265` only.                                                                                                      | 10–21, 26, 27 |
-| **3** — preview and polish                 | `--preview`, `--sweep` (with VMAF/xpsnr scoring), `--dry-run`. Small, and what makes phase 4 safe to iterate on.                                                                                                                                                                | 23–25         |
+| **3** — preview and polish — **done** (`6b80188`) | `--preview`, `--sweep` (with VMAF/xpsnr scoring), `--dry-run`. Small, and what makes phase 4 safe to iterate on.                                                                                                                                                                | 23–25         |
 | **4** — quality and droplet                | Run the sweep on real footage, lock CRF/preset for `final-h265`, record in README. Droplet: fix §14.1's bugs, build the `droplet-run.sh` orchestrator with three-layer self-destruct safety (no snapshot/cloud-init yet — see §14.2).                                          | —             |
 | **5** — Apple Silicon                      | Re-benchmark on arrival, re-tune `host.py`. Reconsider `final-av1`/`draft-vt` (§7.5) now that AV1 gets local playback, and reconsider chunking (§13.5) and droplet snapshot/cloud-init (§14.2) if either is still worth building.                                              | —             |
 

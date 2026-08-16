@@ -5,9 +5,11 @@ import argparse
 import subprocess
 import sys
 import warnings
+from fractions import Fraction
 from pathlib import Path
 
-from csm import ffmpeg, probe, sources, sync
+from csm import encoders, ffmpeg, plan, probe, runner, sources, sync
+from csm import timeline as timeline_mod
 
 
 def _parse_kv_seconds(items: list[str] | None) -> dict[int, float]:
@@ -36,6 +38,17 @@ def _parse_clap_at(spec: str) -> float:
         mm, ss = parts
         return int(mm) * 60 + float(ss)
     return float(spec)
+
+
+def _parse_out_size(spec: str, infos: dict[int, probe.CameraInfo]) -> tuple[int, int]:
+    if spec == "native":
+        widths = [info.first.width for info in infos.values() if info.first]
+        heights = [info.first.height for info in infos.values() if info.first]
+        if not widths:
+            raise ValueError("no cameras present; cannot derive --out-size native")
+        return max(widths) * 2, max(heights) * 2
+    w, h = spec.lower().split("x")
+    return int(w), int(h)
 
 
 def _add_common_args(p: argparse.ArgumentParser) -> None:
@@ -157,6 +170,62 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_render(args: argparse.Namespace) -> int:
+    tool = ffmpeg.locate(args.ffmpeg_path, args.ffprobe_path)
+    cameras = sources.discover_cameras(args.gamedir)
+    infos = {cam: probe.probe_camera(tool, camera)
+             for cam, camera in cameras.items() if camera.present}
+
+    sync_file = args.sync_file or (args.gamedir / "sync.yaml")
+    if not sync_file.exists():
+        print(
+            f"error: {sync_file} not found -- run `csm sync {args.gamedir} --write` first",
+            file=sys.stderr,
+        )
+        return 1
+    data = sync.read_sync_yaml(sync_file)
+    offsets = sync.offsets_from_sync_yaml(data)
+
+    offset_overrides = _parse_kv_seconds(args.offset)
+    offset_overrides.update(_parse_kv_frames(args.offset_frames, args.fps))
+    nudge_overrides = _parse_kv_seconds(args.nudge)
+    offsets = sync.apply_overrides(offsets, offset_overrides, nudge_overrides)
+
+    try:
+        out_w, out_h = _parse_out_size(args.out_size, infos)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    audio_cams = _parse_audio_cams(args.audio_cams)
+    fps = Fraction(args.fps).limit_denominator(100000)
+
+    try:
+        tl = timeline_mod.build_timeline(
+            infos, offsets, out_w=out_w, out_h=out_h, fps=fps, audio_cams=audio_cams,
+            align_start=args.align_start, align_end=args.align_end,
+            start=args.start, end=args.end, duration=args.duration,
+        )
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    profile = encoders.get_profile(args.profile)
+    output_path = args.output or (args.gamedir / "final_video.mp4")
+    jobs = plan.build_plan(tl, profile, output_path)
+
+    if args.dry_run:
+        work_dir = args.work_dir or (args.gamedir / ".csm")
+        for job in jobs:
+            print(runner.dry_run(tool, job, work_dir))
+        return 0
+
+    for job in jobs:
+        runner.run_job(tool, job, work_dir=args.work_dir)
+    print(f"wrote {output_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="csm")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -185,6 +254,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--clap-at", default=None, metavar="MM:SS")
     p_sync.add_argument("--fps", type=float, default=30.0, help="For --offset-frames only")
     p_sync.set_defaults(func=cmd_sync)
+
+    p_render = sub.add_parser("render", help="Render the tiled multicam video")
+    _add_common_args(p_render)
+    p_render.add_argument("--sync-file", type=Path, default=None)
+    p_render.add_argument("--offset", action="append", metavar="N=SEC")
+    p_render.add_argument("--offset-frames", action="append", metavar="N=F")
+    p_render.add_argument("--nudge", action="append", metavar="N=+-SEC")
+    p_render.add_argument("--align-start", choices=("latest", "earliest"), default="latest")
+    p_render.add_argument("--align-end", choices=("longest", "shortest"), default="longest")
+    p_render.add_argument("--start", type=float, default=None)
+    p_render.add_argument("--end", type=float, default=None)
+    p_render.add_argument("--duration", type=float, default=None)
+    p_render.add_argument("--fps", type=float, default=30.0)
+    p_render.add_argument("--audio-cams", default="2,4")
+    p_render.add_argument("--out-size", default="3840x2160", help="WxH, or 'native'")
+    p_render.add_argument("--profile", default="final-h265", choices=sorted(encoders.PROFILES))
+    p_render.add_argument("--output", type=Path, default=None)
+    p_render.add_argument("--work-dir", type=Path, default=None)
+    p_render.add_argument("--dry-run", action="store_true")
+    p_render.set_defaults(func=cmd_render)
 
     return parser
 

@@ -1,12 +1,14 @@
 # Design: rewriting the multicam pipeline
 
-**Status:** approved, Phases 0-1 done. Written 2026-08-15; scope trimmed
+**Status:** approved, Phases 0-2 done. Written 2026-08-15; scope trimmed
 2026-08-16 — chunked encoding, `final-av1`/`draft-vt`, envelope cross-correlation, automatic
 clap-detection, and full droplet automation moved to conditional TODOs (§13) or later phases
 (§15), and the sync design gained an explicit validate-before-building gate (§6.0). Nothing
 below was deleted, only deferred; search for "deferred" to find every cut. Phase 0 landed on
 `main` 2026-08-16 (`b98736b`). Phase 1 (the §6.0 spike, `csm probe`/`csm sync`, GCC-PHAT,
-topology solve, `sync.yaml`) landed on `csm-rewrite` 2026-08-16 (`acc8980`); Phase 2 is next.
+topology solve, `sync.yaml`) landed on `csm-rewrite` 2026-08-16 (`acc8980`). Phase 2
+(`timeline`/`filtergraph`/`plan`/`runner`, `csm render`, single ffmpeg job, 4K default,
+color-range fix) landed on `csm-rewrite` 2026-08-16 (`5d60742`); Phase 3 is next.
 **Implementation happens on a branch; `main` stays usable all season.**
 
 This document is meant to be executable by someone — or something — with no memory of the
@@ -1383,7 +1385,7 @@ replacement has been validated on real footage.
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | **0** — on `main`, same day — **done** (`b98736b`) | Freeze `legacy/generate-ffmpeg.py`. Fix `scale=1900:1080` → `1920:1080` and the duplicated `-movflags faststart`. Add `.gitignore` for `filelist-*`, `concatinated.mp4`, `combined.mp4`. Document that `-s` must be passed, since 5.4K output is happening on every game today. | —             |
 | **1** — headline feature, zero render risk — **done** (`acc8980`) | **Spike first (§6.0):** raw GCC-PHAT against the two archived games, checked against ground truth. Only if that validates, build `csm probe` + `csm sync` (PHAT-only, creation-time hint, weighted-solve topology, manual `--clap-at`) and confirm against the same two games. Writes `sync.yaml`; add an `--offsets-seconds` entry point to the legacy script so it consumes them. Frame-hunting stops immediately; the render path is untouched. If the spike doesn't validate, stop here — manual sync continues and the rest of this phase isn't built. | 1–9           |
-| **2** — new pipeline, single process       | `timeline`/`filtergraph`/`plan`/`runner`, one ffmpeg job, both intermediate passes deleted, 4K default, color-range fix, missing/short cameras working, `final-h265` only.                                                                                                      | 10–21, 26, 27 |
+| **2** — new pipeline, single process — **done** (`5d60742`) | `timeline`/`filtergraph`/`plan`/`runner`, one ffmpeg job, both intermediate passes deleted, 4K default, color-range fix, missing/short cameras working, `final-h265` only.                                                                                                      | 10–21, 26, 27 |
 | **3** — preview and polish                 | `--preview`, `--sweep` (with VMAF/xpsnr scoring), `--dry-run`. Small, and what makes phase 4 safe to iterate on.                                                                                                                                                                | 23–25         |
 | **4** — quality and droplet                | Run the sweep on real footage, lock CRF/preset for `final-h265`, record in README. Droplet: fix §14.1's bugs, build the `droplet-run.sh` orchestrator with three-layer self-destruct safety (no snapshot/cloud-init yet — see §14.2).                                          | —             |
 | **5** — Apple Silicon                      | Re-benchmark on arrival, re-tune `host.py`. Reconsider `final-av1`/`draft-vt` (§7.5) now that AV1 gets local playback, and reconsider chunking (§13.5) and droplet snapshot/cloud-init (§14.2) if either is still worth building.                                              | —             |

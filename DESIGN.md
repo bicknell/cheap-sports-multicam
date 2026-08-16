@@ -1,6 +1,10 @@
 # Design: rewriting the multicam pipeline
 
-**Status:** design approved, not yet implemented. Written 2026-08-15.
+**Status:** design approved, not yet implemented. Written 2026-08-15; scope trimmed
+2026-08-16 — chunked encoding, `final-av1`/`draft-vt`, envelope cross-correlation, automatic
+clap-detection, and full droplet automation moved to conditional TODOs (§13) or later phases
+(§15), and the sync design gained an explicit validate-before-building gate (§6.0). Nothing
+below was deleted, only deferred; search for "deferred" to find every cut.
 **Implementation happens on a branch; `main` stays usable all season.**
 
 This document is meant to be executable by someone — or something — with no memory of the
@@ -314,6 +318,9 @@ legacy/generate-ffmpeg.py   # frozen, unchanged, kept for one season
 tests/
 ```
 
+`runner.py`'s pool/resume responsibilities are the §13.5 chunked-render feature; in v1
+`plan.py` emits a single `FfmpegJob` and `runner.py` just runs it, no pooling or resume.
+
 **Hard rule, enforced by the structure:** `filtergraph.py` and `plan.py` are pure
 functions returning strings and `list[str]` argv. They never touch the filesystem and
 never spawn a process. This is what makes the whole thing testable without encoding
@@ -447,8 +454,9 @@ of disk for a 76 GB game.**
   are left behind permanently and are written with `bytes(f, 'ascii')`, which raises
   `UnicodeEncodeError` on any non-ASCII path. `--precat` restores the old behavior.
 
-Result: **originals + output only** with `--no-chunks`. Chunked mode adds roughly 1×
-output size transiently, deleted on success.
+Result: **originals + output only** — single-process rendering is the only mode in v1
+(§9.1). Chunked mode, when §13.5 gets built, would add roughly 1× output size transiently,
+deleted on success.
 
 ### 5.5 Audio source selection
 
@@ -460,6 +468,25 @@ property, so it must not be baked in. `csm probe --audio` prints per-camera leve
 ---
 
 ## 6. Sync
+
+### 6.0 Validate before building
+
+**Before any of §6.1–§6.6 gets built, spike the core claim.** Run GCC-PHAT directly against
+the extracted audio of the two archived games (`2026-04-26`, `2026-05-03`) — no `sync.yaml`,
+no CLI, no topology solve, just the correlation — and compare the recovered offsets against
+the ground truth in §2.5. This is the highest-leverage check in the whole document, because
+everything from §6.1 onward is infrastructure *around* that correlation, and none of it is
+worth building if the correlation itself is not reliable enough to trust.
+
+Success criterion: offsets recovered within 1/60 s of ground truth on the intra-tripod pairs
+(1↔2, 3↔4), and reasonable agreement on the cross-tripod pairs (1↔3, 2↔4) given the ~120 ms
+per-window σ discussed in §6.4. This is the same check as §16's first verification step,
+just promoted to a gate that happens before implementation rather than after.
+
+If it validates, proceed to build `csm sync` as described below. If it does not, stop here —
+the manual method continues, and automatic sync stays unbuilt rather than half-built on a
+correlation that hasn't earned trust. Either way, this spike is cheap: it needs the audio
+extraction command from §6.2 and the `gcc_phat` function from §6.3, nothing else.
 
 ### 6.1 Pluggable offset sources, with audio as the authority
 
@@ -555,9 +582,10 @@ wrong"`). This over-determination is the difference between "auto-sync worked" a
 "auto-sync silently handed you a garbage number," and it costs nothing because the
 correlations already exist.
 
-`--cross-method {phat,envelope}`: the envelope method frames at 10 ms hop, takes log-RMS,
-mean-subtracts, and correlates envelopes — coarser but far more robust when the two
-tripods hear genuinely different spectra. Default `phat`, auto-fall back to `envelope`.
+**v1 uses PHAT only.** An `envelope` cross-method (frame at 10 ms hop, log-RMS,
+mean-subtract, correlate envelopes — coarser but more robust when the two tripods hear
+genuinely different spectra) is deferred to §13.3, added only if a real game shows PHAT
+struggling on cross-tripod correlation. Until then there is no `--cross-method` flag.
 
 ### 6.5 Clock drift: diagnostic only
 
@@ -565,9 +593,9 @@ Measured under 2 frames over 90 minutes, which is acceptable. Report the Theil�
 as one line and warn only above 3 frames. **Build no correction machinery** — no
 `asetrate`, no `setpts`, both of which the git history records as causing trouble.
 
-If it ever matters, the chunked renderer already recomputes each track's `head` per chunk,
-so feeding it `offset(t) = intercept + slope·t` at the chunk midpoint would make drift
-correction piecewise-constant with no new machinery.
+If it ever matters, §13.5's chunked renderer (if built) already recomputes each track's
+`head` per chunk, so feeding it `offset(t) = intercept + slope·t` at the chunk midpoint
+would make drift correction piecewise-constant with no new machinery.
 
 ### 6.6 `sync.yaml` — the manual-override contract
 
@@ -622,12 +650,12 @@ useless:**
   outdoors. Two or three claps a second apart give redundancy and let the software confirm
   consistency.
 
-Software support: **auto-detect** the sharpest broadband onset common to all four cameras
-within the first few minutes after the last camera starts, use it as the cross-tripod
-measurement when confidence is high, and fall back to windowed correlation silently.
-`--clap-at MM:SS` to point at it directly, `--no-clap` to ignore one. Record which method
+**Software support in v1 is manual only:** `--clap-at MM:SS` points the correlator at the
+clap directly, using it as the cross-tripod measurement for that link. Record which method
 produced each measurement (`kind: clap` vs `kind: cross-tripod`) so a bad clap is
-diagnosable rather than mysterious.
+diagnosable rather than mysterious. **Automatic** detection of the sharpest broadband onset
+common to all four cameras is deferred to §13.4 — it's real onset-detection engineering, and
+manual `--clap-at` already captures the accuracy win at near-zero implementation cost.
 
 Document the procedure in the recording instructions. It costs ten seconds per game and is
 the cheapest available accuracy improvement — but it must stay optional, since the
@@ -755,6 +783,12 @@ picking a number from this document:
 
 ### 7.5 Other profiles
 
+**Both profiles below are deferred to Phase 5, alongside the Apple Silicon work.** Neither
+has a compelling reason to exist in v1: `final-av1`'s blocking objection (no local
+decode/playback on this Intel/T2 Mac) only resolves on Apple Silicon, and `draft-vt` has no
+clear use case ahead of that either. The reasoning is kept here because it's still the right
+reasoning when Phase 5 revisits them — it just isn't built yet.
+
 - **`final-av1`** — a rare three-way win: ~20 % smaller than HEVC at equal quality,
   measured **1.55× faster** than x265 medium, and independent 2026 testing found AV1
   uploads score best against YouTube's own encoder. The usual objection (software AV1 is
@@ -808,8 +842,8 @@ What actually changes:
   hardware render plausibly drops from ~1.2 h to 20–40 min.
 - **AV1 hardware decode on M3 and later** removes the local-playback objection to
   `final-av1`.
-- **x265 and SVT-AV1 both ship NEON assembly**; the chunked design carries over unchanged,
-  with performance-core count driving `jobs`.
+- **x265 and SVT-AV1 both ship NEON assembly**; if §13.5's chunked design gets built, it
+  carries over unchanged, with performance-core count driving `jobs`.
 
 **Strategically, a modern Apple Silicon Mac may make the DigitalOcean droplet
 unnecessary — but the bar is higher than it first appears.** Measured (§3.1), this Xeon
@@ -824,69 +858,19 @@ re-run the §14.4 comparison with real numbers before retiring anything.
 
 ## 9. Speed
 
-### 9.1 Chunked parallel encoding
+### 9.1 Chunked parallel encoding — deferred
 
-A chunk is a time slice of the same filtergraph encoded by an independent ffmpeg process.
+Splitting a render into time-sliced chunks encoded by independent ffmpeg processes was
+designed in detail, then deferred: measured speedup is marginal-to-negative depending on
+configuration (§3.2 — 1.24× best case, 0.80× worst), and its real value (resumability on a
+multi-hour billed droplet render) is speculative until a render actually gets killed by a
+dropped connection. See §13.5 for the full design, the reasoning, and the trigger for
+building it.
 
-**Read §3.2 before implementing this.** On real footage the best configuration was 1.24×
-faster and the worst was 20 % *slower* than not chunking at all — a 1.55× spread between
-two plausible-looking settings. Chunking is a tuning parameter, not a free multiplier, and
-its value is entirely conditional on getting jobs and pools right for the specific machine.
-
-**Because of that, the sizing heuristic below is deliberately replaced by measurement.**
-
-1. **Boundaries** in integer frames, always a multiple of the GOP.
-   `--chunk-seconds 120` → 3600 frames at 30 fps; a 78-minute game is ~39 chunks. More
-   chunks than workers gives load balancing and cheap retry.
-2. **Per-chunk command:** identical filtergraph, each track's `-ss` recomputed as
-   `track_source_time(t0 + chunk_start)`, `-t {chunk_len + 2}` on each input, head/tail
-   pads recomputed for the chunk window (a chunk entirely after a camera died is pure
-   `color`/`tpad`). Output **raw Annex-B, no container**:
-   `-f hevc .csm/chunks/chunk-%03d.hevc`. `repeat-headers=1` guarantees VPS/SPS/PPS at each
-   chunk's leading IDR.
-3. **Audio in one job**, in parallel with the chunks. This eliminates per-chunk A/V drift
-   entirely, and is the reason to do it this way rather than muxing audio per chunk.
-4. **Assemble** — one `-c copy` job:
-   `ffmpeg -r {fps} -f hevc -i video.hevc -i audio.m4a -c copy -tag:v hvc1
-   -movflags +faststart -color_primaries bt709 … -metadata … final_video.mp4`
-5. **Sizing — measure, do not derive.** The obvious heuristic
-   `jobs = perf_cores // 2` would select 4 jobs on this Mac, which measured **20 % slower
-   than a single process**, while 2 jobs measured 1.24× faster. A formula that inverts the
-   right answer on the only machine tested is not trustworthy on machines not yet tested.
-
-   Instead, **`csm self-test --bench` sweeps the configuration and writes the winner to the
-   host config.** Sweep `jobs ∈ {1, 2, 4, 8}` (capped by cores and RAM) against
-   `pools = total_cores // jobs`, on a short real-footage or synthetic workload, and record
-   the fastest. A few minutes once per machine, and it self-corrects for the Apple Silicon
-   migration and for whatever droplet size is in use. `--jobs`/`--threads-per-job`
-   override; **`--jobs 1` (no chunking) must remain a first-class, well-tested path**,
-   because on this hardware it beats a badly-configured chunked run.
-
-   Memory budget from measurement, not assumption: single-process x265 4K 10-bit peaked at
-   **5.96 GB** on real footage, and **SVT-AV1 peaked at 9.5 GB**. Both are far above the
-   1.9 GB seen in an earlier run, so the per-worker budget must be probed per encoder, and
-   AV1 needs roughly double the headroom of HEVC.
-6. **Resume.** `.csm/manifest.json` hashes (sync.yaml, profile, timeline, chunk boundaries,
-   tool version); matching non-empty chunks are skipped. **This is now the strongest
-   argument for chunk infrastructure** — for a multi-hour render killed by a dropped SSH
-   session on a billed droplet, resumability is worth more than the uncertain speedup, and
-   it is a robustness feature rather than a performance one.
-7. **Disk.** Chunks total roughly the final video; budget 2× output. Check
-   `shutil.disk_usage` before starting and fail early with a number.
-
-**Be honest about what chunking is worth.** Best measured case 1.24×, worst 0.80×, and
-which one you get depends on configuration. The reliable speed changes are the **4K output
-resolution (2.26× measured)** and **`--preview`**. Chunking should be built for resume and
-retry, with the speedup treated as a tunable bonus that must be verified per host.
-
-Chunking's value on the droplet is narrower and more specific than a raw multiplier:
-because DigitalOcean bills whole hours, a speedup is worth **either a full hour of billing
-or nothing at all**, depending entirely on which side of the boundary the job lands.
-Extrapolating §3.1 to a 32-core droplet puts the proposed profile near **1.4 h of encode**
-plus transfer — i.e. already over the one-hour line, where a 1.24× chunking win would be
-the difference between two billed hours and three once transfer is included. That makes
-the per-host configuration sweep worth its few minutes, and makes the CRF choice
-economically meaningful rather than purely aesthetic.
+**Single-process rendering is the only path in v1.** `plan.py` always emits one `FfmpegJob`
+covering the whole timeline; there is no `--jobs`/`--chunk-seconds`/`--resume` surface until
+§13.5 gets built. The reliable speed change is the **4K output resolution (2.26× measured,
+§3.1)**, not chunking.
 
 ### 9.2 `--preview`
 
@@ -977,7 +961,7 @@ work. 640×360 at `-preset ultrafast` for speed; 1920×1080 for the shape tests.
 | 19  | `non_16x9_source_letterboxed`             | 4:3 source → padded, not stretched; a known edge pixel is black                                                                                                                                  |
 | 20  | `fps_derived_from_source`                 | 25 fps fixture, no `--fps` → 30 fps output by default, `--fps 25` gives 25; `--offset-frames` converts at the output rate                                                                        |
 | 21  | `gop_scales_with_fps`                     | `--fps 60` → `keyint=120` in the emitted params, and chunk boundaries stay GOP multiples                                                                                                         |
-| 22  | `chunked_matches_single`                  | `--jobs 1` vs `--jobs 3 --chunk-seconds 2` → identical frame count and duration, `psnr` > 40 dB. **This is what makes chunking safe to touch.**                                                  |
+| 22  | `chunked_matches_single` *(deferred with §13.5)* | `--jobs 1` vs `--jobs 3 --chunk-seconds 2` → identical frame count and duration, `psnr` > 40 dB. Written when chunking is, not before.                                                  |
 | 23  | `preview_window`                          | `--preview --preview-at 50%` → duration matches; PSNR vs the same slice of a full render > 35 dB                                                                                                 |
 | 24  | `dry_run_is_valid_shell`                  | output passes `bash -n`; fixture directory literally named `game dir with 'quote' and "dquote"`; every path round-trips                                                                          |
 | 25  | `metadata_roundtrip`                      | quotes, ampersands, unicode → ffprobe reads back identical values                                                                                                                                |
@@ -1036,21 +1020,24 @@ Sources   --camera-dir N=PATH  --precat
 Sync      --no-auto-sync  --sync-file PATH  --no-time-prior
           --prior-window 5  --prior-tolerance 5
           --offset N=SEC  --offset-frames N=F  --nudge N=±SEC
-          --cross-method {phat,envelope}  --sync-windows 24  --sync-window-len 20
+          --sync-windows 24  --sync-window-len 20
           --max-offset 1800  --min-confidence 6.0
-          --clap-at MM:SS  --no-clap
+          --clap-at MM:SS
 Timeline  --align-start {latest,earliest}  --align-end {longest,shortest}
           --start T --end T --duration D  --fps 30  --audio-cams 2,4
           --audio-gain N=+6dB  --out-size 3840x2160|native|WxH
-Encode    --profile {final-h265,final-av1,draft-vt,preview}
+Encode    --profile {final-h265,preview}
           --encoder NAME --preset NAME --crf N --bitrate N
           --x265-param K=V (repeatable)  --scaler {bicubic,lanczos,spline}
-Run       --jobs auto|N  --threads-per-job N  --chunk-seconds 120  --no-chunks
-          --resume/--no-resume  --keep-intermediates  --output PATH  --work-dir PATH
+Run       --output PATH  --work-dir PATH
 Preview   --preview  --preview-seconds 60  --preview-at middle|MM:SS|PCT (repeatable)
           --preview-encoder auto|NAME  --preview-marks
           --sweep KEY=v1,v2,... (repeatable)
 ```
+
+v1 has no `--jobs`/`--threads-per-job`/`--chunk-seconds`/`--no-chunks`/`--resume`,
+`--cross-method`, or `--no-clap`, and `--profile` has no `final-av1`/`draft-vt`. These
+return when §13.3–§13.5 and Phase 5 build the features they control.
 
 Config in files: built-in encoder profiles (`csm/profiles.toml`), overridable at
 `~/.config/csm/config.toml` and `GAMEDIR/csm.yaml`; host defaults; `GAMEDIR/metadata.yaml`
@@ -1114,6 +1101,75 @@ the primary path.
 The reason this is cheap to defer: the source-ranking abstraction is the only thing that
 needs to exist now, and it costs nothing.
 
+### 13.3 Envelope cross-method fallback
+
+`--cross-method envelope`: frame at 10 ms hop, take log-RMS, mean-subtract, and correlate
+envelopes — coarser than PHAT but more robust when the two tripods hear genuinely different
+spectra. v1 ships PHAT only (§6.4).
+
+- **Trigger to build:** a real game where cross-tripod PHAT correlation comes back low
+  confidence or wrong, and retrying with more/longer windows doesn't fix it.
+- **Why cheap to defer:** the `--cross-method` flag and the source-ranking/confidence
+  machinery around it already accommodate a second method; adding `envelope` is a new
+  correlation function, not a redesign.
+
+### 13.4 Automatic clap-onset detection
+
+Auto-detect the sharpest broadband onset common to all four cameras within the first few
+minutes after the last camera starts, use it as the cross-tripod measurement when
+confidence is high, and fall back to windowed correlation silently. v1 ships manual
+`--clap-at MM:SS` only (§6.7).
+
+- **Trigger to build:** the manual workflow (watch the preview, find the clap, type the
+  timestamp) proves annoying enough in practice to be worth automating.
+- **Why cheap to defer:** `kind: clap` vs `kind: cross-tripod` measurement tagging already
+  exists in the design (§6.7); automatic detection only needs to produce the same
+  `--clap-at`-equivalent value earlier in the pipeline.
+
+### 13.5 Chunked parallel encoding and resume
+
+A chunk is a time slice of the same filtergraph encoded by an independent ffmpeg process.
+Deferred from §9.1 — full design kept here so it's ready to build without re-deriving it.
+
+**Read §3.2 first.** On real footage the best configuration was 1.24× faster and the worst
+was 20 % *slower* than not chunking at all — a 1.55× spread between two plausible-looking
+settings. Chunking is a tuning parameter, not a free multiplier, and its value is entirely
+conditional on getting jobs and pools right for the specific machine.
+
+- **Boundaries** in integer frames, always a multiple of the GOP. `--chunk-seconds 120` →
+  3600 frames at 30 fps; a 78-minute game is ~39 chunks.
+- **Per-chunk command:** identical filtergraph, each track's `-ss` recomputed as
+  `track_source_time(t0 + chunk_start)`, `-t {chunk_len + 2}` on each input, head/tail pads
+  recomputed for the chunk window. Output **raw Annex-B, no container**:
+  `-f hevc .csm/chunks/chunk-%03d.hevc`. `repeat-headers=1` guarantees VPS/SPS/PPS at each
+  chunk's leading IDR.
+- **Audio in one job**, parallel with the chunks — eliminates per-chunk A/V drift.
+- **Assemble** — one `-c copy` job muxing the concatenated chunks with the audio track.
+- **Sizing — measure, do not derive.** `jobs = perf_cores // 2` picks 4 jobs on the
+  benchmark Mac, which measured 20 % *slower* than a single process, while 2 jobs measured
+  1.24× faster — a heuristic that inverts the right answer on the only machine tested.
+  `csm self-test --bench` should sweep `jobs ∈ {1, 2, 4, 8}` (capped by cores and RAM)
+  against `pools = total_cores // jobs` and record the fastest. `--jobs 1` (no chunking)
+  must stay a first-class, well-tested path, since it beats a badly-configured chunked run
+  on this hardware. Memory budget from measurement, not assumption: single-process x265 4K
+  10-bit peaked at 5.96 GB, SVT-AV1 at 9.5 GB — the per-worker budget must be probed per
+  encoder.
+- **Resume.** `.csm/manifest.json` hashes (sync.yaml, profile, timeline, chunk boundaries,
+  tool version); matching non-empty chunks are skipped. **This is the actual argument for
+  building this at all** — for a multi-hour render killed by a dropped SSH session on a
+  billed droplet, resumability is worth more than the uncertain speedup, and it is a
+  robustness feature rather than a performance one.
+- **Disk.** Chunks total roughly the final video; budget 2× output.
+
+**Trigger to build:** a droplet run is actually killed mid-render by a dropped connection or
+similar, or encode time becomes a real bottleneck once §14's droplet economics (whole-hour
+billing, §14.3) are being felt in practice. Ship test 22 (`chunked_matches_single`, §10.2)
+first, before the feature, once building it — that's what makes chunking safe to touch.
+
+**Why cheap to defer:** none of Phases 1–4 depend on it. `plan.py` already separates "what
+jobs to run" from "how to execute them," so adding a chunked planner later is additive, not
+a rewrite.
+
 ---
 
 ## 14. DigitalOcean
@@ -1139,7 +1195,7 @@ Ubuntu 25.04 ships ffmpeg 7.1.x. If the version gate fails, fall back to a BtbN 
 csm probe  "$GAMEDIR"
 csm sync   "$GAMEDIR" --write "$@"
 csm render "$GAMEDIR" --dry-run "$@" | tee "$GAMEDIR/.csm/render.sh"   # audit trail
-csm render "$GAMEDIR" --profile final-h265 --jobs auto "$@"
+csm render "$GAMEDIR" --profile final-h265 "$@"
 ```
 
 **Pre-existing bugs to fix.** `droplet-destroy.sh` is missing a line continuation *and*
@@ -1163,14 +1219,22 @@ is gone.
 ./droplet-run.sh GAMEDIR    # create → provision → fetch → encode → upload → destroy
 ```
 
+**v1 scope:** the orchestrator script and the tear-down safety below, built on top of the
+§14.1 bug fixes, using the existing from-scratch `apt-get install` provisioning (already
+sped up by deleting the ffmpeg source build). **Deferred:** pre-baked snapshot and
+cloud-init/`user_data` provisioning — genuine wins, but a second axis of infrastructure on
+top of getting the orchestrator and its safety net right first. Revisit either if
+provisioning time is still the dominant cost once the orchestrator is in real use.
+
 Time savings, in order of value:
 
-- **Pre-bake a snapshot.** Build a DO custom image once with ffmpeg, `csm` and `s3cmd`
-  installed, and create every droplet from it. This removes provisioning from *every* run
-  rather than optimizing it. A ~5 GB snapshot costs about $0.30/month — trivial against one
-  wasted billed hour. Largest single automation win.
-- **`user_data` / cloud-init instead of steps 1–2**, when not using a snapshot, so
-  provisioning runs during boot rather than after an SSH login.
+- **Pre-bake a snapshot** *(deferred)*. Build a DO custom image once with ffmpeg, `csm` and
+  `s3cmd` installed, and create every droplet from it. This removes provisioning from
+  *every* run rather than optimizing it. A ~5 GB snapshot costs about $0.30/month — trivial
+  against one wasted billed hour. Largest single automation win, and the first thing to
+  build if provisioning time turns out to matter in practice.
+- **`user_data` / cloud-init instead of steps 1–2** *(deferred)*, when not using a snapshot,
+  so provisioning runs during boot rather than after an SSH login.
 - **Drop the `apt upgrade` and reboot.** Several billed minutes to update a disposable box.
 - **Start the Spaces download at boot**, concurrent with remaining installs.
 - **Replace the fixed `sleep 15`** with polling until status is `active` *and* network
@@ -1185,9 +1249,11 @@ Tear-down needs more care, because the expensive failure is the opposite one:
 - **Three independent layers:** the droplet deletes itself on completion (success *or*
   failure); the local orchestrator destroys it after a timeout; a hard deadline armed at
   creation deletes it regardless. Any one failing must not leave a box running.
-- **Ship logs to Spaces continuously**, not at the end. A self-destructing droplet takes its
-  logs with it, so an unattended failure is undiagnosable unless the log is already
-  elsewhere. This is what makes unattended operation safe to trust.
+- **Ship logs to Spaces before and after each risky step** (provision, fetch, encode,
+  upload), not only at the end. A self-destructing droplet takes its logs with it, so an
+  unattended failure is undiagnosable unless the log is already elsewhere. This is what
+  makes unattended operation safe to trust — it doesn't need to be a continuous stream, just
+  never lost with the box.
 - **Report elapsed wall time and billed hours** at the end of every run, so droplet-size
   decisions stay evidence-based.
 
@@ -1229,7 +1295,8 @@ Do **not** benchmark all seven variants. Three cheap measurements answer the que
 2. **`csm self-test --bench` on Premium Intel 16-core and 32-core.** Same synthetic
    20-second 4K workload used on the Mac, so numbers are directly comparable. Two minutes
    per box — spin up, bench, destroy. Gives the core-scaling factor and finally *measures*
-   the 25–27 core ceiling instead of assuming it.
+   the 25–27 core ceiling instead of assuming it. In v1 this is single-process wall time
+   only — the jobs/pools sizing sweep described under §13.5 applies once chunking exists.
 3. **One full real-game run** on whichever size lands closest to the hour boundary, timing
    **download, encode and upload separately.** The phase breakdown says whether to spend on
    cores or on data movement.
@@ -1313,12 +1380,15 @@ replacement has been validated on real footage.
 | Phase                                      | Content                                                                                                                                                                                                                                                                         | Tests         |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | **0** — on `main`, same day                | Freeze `legacy/generate-ffmpeg.py`. Fix `scale=1900:1080` → `1920:1080` and the duplicated `-movflags faststart`. Add `.gitignore` for `filelist-*`, `concatinated.mp4`, `combined.mp4`. Document that `-s` must be passed, since 5.4K output is happening on every game today. | —             |
-| **1** — headline feature, zero render risk | `csm probe` + `csm sync`, validated against the two archived games. Writes `sync.yaml`; add an `--offsets-seconds` entry point to the legacy script so it consumes them. Frame-hunting stops immediately; the render path is untouched.                                         | 1–9           |
-| **2** — new pipeline, single process       | `timeline`/`filtergraph`/`plan`/`runner`, one ffmpeg job, both intermediate passes deleted, 4K default, color-range fix, missing/short cameras working.                                                                                                                         | 10–21, 26, 27 |
-| **3** — preview and polish                 | `--preview`, `--sweep`, `--dry-run`. Small, and what makes phases 4–5 safe to iterate on.                                                                                                                                                                                       | 23–25         |
-| **4** — chunked render + resume            | Ship test 22 **first**, then the feature.                                                                                                                                                                                                                                       | 22            |
-| **5** — quality and droplet                | Run the sweep on real footage, lock CRF/preset/encoder, record in README. Then `final-av1`, `draft-vt`, droplet script fixes and automation.                                                                                                                                    | —             |
-| **6** — Apple Silicon                      | Re-benchmark on arrival, re-tune `host.py`, decide whether AV1 becomes the default upload profile and whether the droplet is still needed.                                                                                                                                      | —             |
+| **1** — headline feature, zero render risk | **Spike first (§6.0):** raw GCC-PHAT against the two archived games, checked against ground truth. Only if that validates, build `csm probe` + `csm sync` (PHAT-only, creation-time hint, weighted-solve topology, manual `--clap-at`) and confirm against the same two games. Writes `sync.yaml`; add an `--offsets-seconds` entry point to the legacy script so it consumes them. Frame-hunting stops immediately; the render path is untouched. If the spike doesn't validate, stop here — manual sync continues and the rest of this phase isn't built. | 1–9           |
+| **2** — new pipeline, single process       | `timeline`/`filtergraph`/`plan`/`runner`, one ffmpeg job, both intermediate passes deleted, 4K default, color-range fix, missing/short cameras working, `final-h265` only.                                                                                                      | 10–21, 26, 27 |
+| **3** — preview and polish                 | `--preview`, `--sweep` (with VMAF/xpsnr scoring), `--dry-run`. Small, and what makes phase 4 safe to iterate on.                                                                                                                                                                | 23–25         |
+| **4** — quality and droplet                | Run the sweep on real footage, lock CRF/preset for `final-h265`, record in README. Droplet: fix §14.1's bugs, build the `droplet-run.sh` orchestrator with three-layer self-destruct safety (no snapshot/cloud-init yet — see §14.2).                                          | —             |
+| **5** — Apple Silicon                      | Re-benchmark on arrival, re-tune `host.py`. Reconsider `final-av1`/`draft-vt` (§7.5) now that AV1 gets local playback, and reconsider chunking (§13.5) and droplet snapshot/cloud-init (§14.2) if either is still worth building.                                              | —             |
+
+Chunked encoding (§13.5), the envelope cross-method (§13.3), and automatic clap-detection
+(§13.4) are not phases — they're conditional TODOs, built only if real use shows they're
+needed.
 
 **Keep from the old script, deliberately:** the `cameraN/` directory convention, the
 `metadata.yaml` format and semantics, the `0_0|w0_0|0_h0|w0_h0` xstack layout, cameras 2 and
@@ -1329,16 +1399,18 @@ expressed as `--dry-run` with correct quoting.
 
 ## 16. Verification
 
-1. **Real-footage sync validation, first.** Run `csm sync` against `2026-04-26` and
-   `2026-05-03`, comparing against the ground truth in §2.5. Needs no rendering, and is the
-   highest-value check available.
+1. **Real-footage sync validation, first — this is the §6.0 gate, not a follow-up check.**
+   Run raw GCC-PHAT against `2026-04-26` and `2026-05-03`, comparing against the ground
+   truth in §2.5, *before* building `sync.yaml`/CLI/topology-solve machinery around it.
+   Needs no rendering, and is the highest-value check available.
 2. **Unit and integration suite**: `pytest -m "not slow"` on every save, full suite before
    each commit.
 3. **`csm self-test`** on the droplet and on any new machine.
 4. **Legacy-vs-new equivalence** (Phase 2): render the same 60-second window through both
    and compare with `ffmpeg -i a -i b -lavfi psnr`. Expect > 40 dB where settings match.
-5. **Chunking equivalence** (test 22) before trusting the chunked path on a real game.
-6. **The CRF / preset / encoder decision** (Phase 5): `csm preview --sweep` on a real game;
+5. **Chunking equivalence** (test 22) — only applicable once §13.5 is built; not part of
+   the v1 critical path.
+6. **The CRF / preset / encoder decision** (Phase 4): `csm preview --sweep` on a real game;
    record the choice and reasoning in the README. Also compare 4K CRF 23 against the
    archived 5.4K CRF 26 master on a real render.
 7. **First real game**: `csm probe` → `csm sync --write` → inspect `sync.yaml` →
@@ -1356,6 +1428,7 @@ expressed as `--dry-run` with correct quoting.
    resolve global time → `(segment_index, local_offset)` in Python and build the input as
    that segment with `-ss local_offset` followed by the rest.
 3. **Chunk-boundary visible quality steps** — quantified by test 22 rather than assumed.
+   Not a live risk in v1 since chunking is deferred (§13.5); applies once it's built.
 4. **HEVC Main10 + `hvc1` playback in QuickTime on this T2 Mac** — expected fine, not
    verified. Check with a preview before making 10-bit the default.
 5. **A camera whose clock was never synced** makes its `creation_time` hint useless. The
@@ -1366,9 +1439,10 @@ expressed as `--dry-run` with correct quoting.
 7. **numpy and scipy are not installed** on this Mac; `pipx install .` is README step 1.
 8. **Chunked encoding's speedup is configuration-dependent and can be negative** (§3.2) —
    measured spread 1.55× between two reasonable-looking settings, with the obvious
-   heuristic picking the losing one on this machine. Mitigated by making `csm self-test
-   --bench` sweep and record the winner, and by keeping `--jobs 1` first-class. **Do not
-   build Phase 4 around an assumed multiplier.**
+   heuristic picking the losing one on this machine. This is exactly why it's deferred to
+   §13.5 rather than built: there's no assumed multiplier to build around yet, and there
+   won't be one until `csm self-test --bench` measures a specific host. If §13.5 is ever
+   built, keep `--jobs 1` first-class regardless.
 9. **The proposed quality profile costs 1.59×** over today's encoder settings at the same
    resolution, eating about half the gain from dropping to 4K, and is not a file-size win
    over today's output. §7.2 is a starting point, not a verdict; the §7.3 sweep settles it.
@@ -1382,6 +1456,12 @@ expressed as `--dry-run` with correct quoting.
 13. **The encoder comparison in §3.3 used synthetic content**, which inflates absolute times
     and distorts CRF-to-size behaviour badly. Only its ratios are usable, and its CRF table
     must not be used for size budgeting.
+14. **The whole automatic-sync feature is gated on the §6.0 spike, not assumed.** §2.4's
+    creation-time analysis and §6's design are strong reasoning, but reasoning isn't the
+    same as GCC-PHAT actually reproducing §2.5's ground truth on real archived audio. If the
+    spike doesn't validate closely enough, Phase 1 stops at "manual sync continues" — the
+    rewrite still delivers Phase 2's pipeline correctness and speed wins, but the headline
+    "easier to use" goal would need a different approach than audio correlation.
 
 ---
 

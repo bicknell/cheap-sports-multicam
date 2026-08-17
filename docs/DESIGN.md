@@ -1,17 +1,20 @@
 # Design: rewriting the multicam pipeline
 
-**Status:** approved, Phases 0-3 done. Written 2026-08-15; scope trimmed
-2026-08-16 — chunked encoding, `final-av1`/`draft-vt`, envelope cross-correlation, automatic
-clap-detection, and full droplet automation moved to conditional TODOs (§13) or later phases
-(§15), and the sync design gained an explicit validate-before-building gate (§6.0). Nothing
-below was deleted, only deferred; search for "deferred" to find every cut. Phase 0 landed on
-`main` 2026-08-16 (`b98736b`). Phase 1 (the §6.0 spike, `csm probe`/`csm sync`, GCC-PHAT,
-topology solve, `sync.yaml`) landed on `csm-rewrite` 2026-08-16 (`acc8980`). Phase 2
+**Status:** approved, Phases 0-3 done, Phase 4's quality-tuning half done (droplet half
+still open). Written 2026-08-15; scope trimmed 2026-08-16 — chunked encoding,
+`final-av1`/`draft-vt`, envelope cross-correlation, automatic clap-detection, and full
+droplet automation moved to conditional TODOs (§13) or later phases (§15), and the sync
+design gained an explicit validate-before-building gate (§6.0). Nothing below was deleted,
+only deferred; search for "deferred" to find every cut. Phase 0 landed on `main` 2026-08-16
+(`b98736b`). Phase 1 (the §6.0 spike, `csm probe`/`csm sync`, GCC-PHAT, topology solve,
+`sync.yaml`) landed on `csm-rewrite` 2026-08-16 (`acc8980`). Phase 2
 (`timeline`/`filtergraph`/`plan`/`runner`, `csm render`, single ffmpeg job, 4K default,
 color-range fix) landed on `csm-rewrite` 2026-08-16 (`5d60742`). Phase 3 (`csm preview`,
 `--sweep`, metadata embedding, `check_capabilities()`, and a fix for a real concat-demuxer
-seek bug found while testing) landed on `csm-rewrite` 2026-08-16 (`6b80188`); Phase 4 is
-next.
+seek bug found while testing) landed on `csm-rewrite` 2026-08-16 (`6b80188`). Phase 4's
+quality-tuning half (locked CRF/preset/aq-strength from a real sweep, `--field-cutoff`,
+`GAMEDIR/csm.yaml` persistence, `--upload-mbps`) landed on `csm-rewrite` 2026-08-17
+(`c5fbf74`); the droplet half (§14) is still open.
 **Implementation happens on a branch; `main` stays usable all season.**
 
 This document is meant to be executable by someone — or something — with no memory of the
@@ -465,6 +468,20 @@ Result: **originals + output only** — single-process rendering is the only mod
 (§9.1). Chunked mode, when §13.5 gets built, would add roughly 1× output size transiently,
 deleted on success.
 
+**Revised in Phase 3, from real ffmpeg behavior, not assumption**: head-trim (a camera that
+starts before the common timeline t0) was originally meant to use `-ss` before the concat
+demuxer's `-i`, matching §3.4's verified-accurate plain-file seek. Verified against real
+footage that this is unreliable specifically for the concat demuxer whenever the source has
+audio — real camera clips always do — failing outright (empty/video-less output, exit code
+0, no error raised) for any nonzero seek, down to 0.1s. Fixed by trimming in-graph instead
+(`trim=start=.../atrim=start=...`, the same frame-accurate pattern §3.4 already verified for
+plain files) — correct, but decode-and-discard from the start of the concat sequence, which
+is fine for a full render (head is at most the camera-to-camera sync offset) but was
+initially unbounded for a `--preview` window deep into a long game (observed: 80+ minutes of
+decode to reach a 60s window). Phase 4 bounded it: whole leading segment *files* are pruned
+from the concat list first (free — fewer `-i` entries, no seeking), so the in-graph trim
+only ever pays for at most one segment's worth of decode, never the camera's full history.
+
 ### 5.5 Audio source selection
 
 `--audio-cams`, still defaulting to `2,4`. Which mics face usefully is a camera-model
@@ -704,14 +721,35 @@ Four things follow, and they matter more than the table:
 ### 7.2 Final profile (`final-h265`, default)
 
 ```
--c:v libx265 -preset medium -crf 23 -pix_fmt yuv420p10le -profile:v main10
+-c:v libx265 -preset fast -crf 23 -pix_fmt yuv420p10le -profile:v main10
 -x265-params keyint={2*fps}:min-keyint={2*fps}:no-open-gop=1:repeat-headers=1:
-             aq-mode=3:aq-strength=1.0:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=40:ref=4
+             aq-mode=3:aq-strength=0.3:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=40:ref=4
 -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv
 -tag:v hvc1
 -c:a aac -b:a 192k -ar 48000 -ac 2
 -movflags +faststart
 ```
+
+**Phase 4 update, from a real `--sweep` against actual game footage** (not the synthetic
+extrapolation this section was originally written against): `preset` moved from `medium` to
+`fast`. Measured on 2026-05-03 (24s window, right as all four cameras go live): `medium`
+costs 293.6s wall for a 78.04 VMAF full-4K encode; `fast` costs 211.0s (≈28% faster) for
+77.55 VMAF — half a VMAF point, in the same "diminishing returns" territory the CRF
+comparison below already shows. CRF 23 itself was kept as-is: CRF 21/23/26 scored
+79.50/78.04/75.33 VMAF at sizes 45.6/31.7/17.3 GB extrapolated-full-game — CRF barely moves
+quality relative to how much it moves size, echoing this document's own §3.1 finding that
+resolution buys far more than CRF does.
+
+**`aq-strength` moved from `1.0` to `0.3`**, from a real sweep against the worst-case-turf
+game (2026-04-19, §7.7): 1.0→0.3 shrank the file ~13% for a 0.26 VMAF point cost, roughly
+linear the whole way with no sign of a cliff by 0.3 — a real, favorable, monotonic tradeoff,
+unlike `psy-rd`, which was flat across 0.5–2.0 on the same content (barely 1% size change).
+See §13.6 for the TODO on testing further below 0.3 and exposing this as a real option
+instead of a fixed value.
+
+**Treat all of this as provisional**, not final: re-sweep after real experience with
+`--field-cutoff` (§7.7) and again on any new hardware (droplet, Apple Silicon) — see
+`docs/REFERENCE.md` §5.3 for the full table and `csm preview --sweep`'s usage (§7.3 below).
 
 Changes from today, each with a reason:
 
@@ -830,6 +868,36 @@ contending with a VideoToolbox encode for the same T2 block, and `-hwaccel` with
 `-hwaccel_output_format` forces a `hwdownload` before the filter graph anyway. Note it in
 the docs; revisit only on Apple Silicon.
 
+### 7.7 `--field-cutoff`: stop paying for sky and stands
+
+Built in Phase 4 from a real observation: `aq-mode`/`psy-rd` (§7.2) spend bits on whatever
+looks locally complex, which shiny turf glare and distant background supply as readily as a
+player does. A blue-turf field (2026-04-19) measured 3.86 bits/pixel/s against a green-turf
+field's (2026-04-26) 1.77 at identical encoder settings — over 2× — strongly suggesting a
+specular-reflectivity difference in that turf product, though hue itself vs. reflectivity
+wasn't isolated by controlled comparison.
+
+True region-of-interest encoding (track the ball/players, feed x265 a per-frame QP-offset
+map) was considered and scoped down: the cameras are tripod-fixed for the whole game, so the
+field/sky boundary sits at a **constant height** the entire recording — a single per-camera
+pixel cutoff, not a tracked region, covers the actual observed case (sky, stands, distant
+parking lot) without needing any detection machinery. A trapezoid/arbitrary-polygon mask was
+also considered (cameras are elevated and angled down, so the true field boundary isn't a
+rectangle) and rejected for v1: expressible via a `geq` point-in-polygon pixel expression
+without new dependencies, but fiddly and hard to verify short of rendering and eyeballing
+where it lands, for a case (irregular boundary encroaching from the sides) that hasn't
+actually come up. A plain horizontal split covers what's actually been observed.
+
+**Mechanism**: `split` the camera's decoded frame into two copies; `crop` + `gblur` the
+strip above the cutoff; `crop` the strip below unchanged; `vstack` them back together before
+the existing scale/pad chain. Native-resolution pixel coordinates (matching what a still
+frame from `csm probe --frame` shows), applied before any scaling to tile size. Lowering the
+blurred strip's local complexity is what makes `aq-mode`/`psy-rd` spend fewer bits there —
+no encoder feature beyond what `final-h265` already uses.
+
+Not persisted by itself; see §12.1's `GAMEDIR/csm.yaml` — field size, tripod height, and
+framing all vary game to game, so there's no sensible tool-wide default.
+
 ---
 
 ## 8. Apple Silicon
@@ -884,12 +952,24 @@ covering the whole timeline; there is no `--jobs`/`--chunk-seconds`/`--resume` s
 Deliberately **not** a special case: a preview is a `RenderPlan` with exactly one chunk
 whose window is `[preview_t0, preview_t0 + preview_seconds]`, muxed straight to mp4 with
 audio. Same code path, so a preview that looks right guarantees the full render is built
-the same way. Efficiency comes entirely from input seek (measured 0.17 s) — ffmpeg touches
-only the relevant segments per camera.
+the same way.
+
+**Revised in Phase 3, from what real footage found**: input-side `-ss` on the concat
+demuxer turned out to be unreliable whenever the source has audio (§5.4's own note) — real
+camera clips always do — so "efficiency comes entirely from input seek" (this section's
+original claim, based on a plain-file measurement of 0.17s) doesn't hold for a preview
+window positioned deep into a long game. The actual mechanism is bounded, not free: whole
+leading segment *files* are pruned from the concat list first (free — no seeking, just
+fewer `-i` entries), so the remaining in-graph `trim`/`atrim` only ever has to decode-and-
+discard at most one segment's worth (§5.4), not the camera's full history. A window near the
+start of a long game is still fast; one deep into it can mean a real, if bounded, minute-
+scale decode cost before encode even starts (Sec 3.4 `docs/REFERENCE.md`'s note on window
+position and speed).
 
 Default `--preview-at middle`, plus an automatic second window at the first moment all four
 cameras are live, where a sync error is most visible. Expected wall time: ~43 s with
-`hevc_videotoolbox`, 60–90 s with `libx265 -preset veryfast`.
+`hevc_videotoolbox`, 60–90 s with `libx265 -preset veryfast`, **plus** the decode-discard
+cost above if the window sits far from the timeline's start.
 
 No quadrant marking needed: the cameras already burn in a name and date overlay in
 hardware, and since the four cameras point in four different directions at the field, a
@@ -1016,15 +1096,14 @@ choices:
 ## 12. CLI
 
 ```
-csm probe   GAMEDIR [--json] [--audio]
+csm probe   GAMEDIR [--json] [--audio] [--frame] [--frame-at SEC]
 csm sync    GAMEDIR [--write] [sync options]
 csm render  GAMEDIR [render options]
 csm preview GAMEDIR [preview options]
 csm self-test [--bench]
 
-Global    -v/--verbose  -q/--quiet  --dry-run  --ffmpeg PATH  --ffprobe PATH
-Sources   --camera-dir N=PATH  --precat
-Sync      --no-auto-sync  --sync-file PATH  --no-time-prior
+Global    -v/--verbose  -q/--quiet  --ffmpeg PATH  --ffprobe PATH
+Sync      --sync-file PATH  --no-time-prior
           --prior-window 5  --prior-tolerance 5
           --offset N=SEC  --offset-frames N=F  --nudge N=±SEC
           --sync-windows 24  --sync-window-len 20
@@ -1032,23 +1111,41 @@ Sync      --no-auto-sync  --sync-file PATH  --no-time-prior
           --clap-at MM:SS
 Timeline  --align-start {latest,earliest}  --align-end {longest,shortest}
           --start T --end T --duration D  --fps 30  --audio-cams 2,4
-          --audio-gain N=+6dB  --out-size 3840x2160|native|WxH
-Encode    --profile {final-h265,preview}
-          --encoder NAME --preset NAME --crf N --bitrate N
-          --x265-param K=V (repeatable)  --scaler {bicubic,lanczos,spline}
-Run       --output PATH  --work-dir PATH
-Preview   --preview  --preview-seconds 60  --preview-at middle|MM:SS|PCT (repeatable)
+          --out-size 3840x2160|native|WxH
+          --field-cutoff N=PIXELS (repeatable, §7.7)
+Encode    --profile {final-h265,preview-videotoolbox,preview-x265}
+          --crf N --preset NAME  (final-h265 only; §12.1 on persistence)
+Run       --output PATH  --work-dir PATH  --dry-run
+Preview   --preview-seconds 60  --preview-at middle|MM:SS|PCT (repeatable)
           --preview-encoder auto|NAME
-          --sweep KEY=v1,v2,... (repeatable)
+          --sweep KEY=v1,v2,... (repeatable: crf, preset, encoder, psy-rd, aq-strength)
+          --upload-mbps N  (§7.4; default 40, not a safe assumption for anyone else's connection)
 ```
 
 v1 has no `--jobs`/`--threads-per-job`/`--chunk-seconds`/`--no-chunks`/`--resume`,
-`--cross-method`, or `--no-clap`, and `--profile` has no `final-av1`/`draft-vt`. These
-return when §13.3–§13.5 and Phase 5 build the features they control.
+`--cross-method`, or `--no-clap`, and `--profile` has no `final-av1`/`draft-vt`,
+`--encoder`/`--bitrate`/`--x265-param`/`--scaler` (a generic escape hatch onto arbitrary
+x265 params was considered and deferred — `--sweep psy-rd=...`/`aq-strength=...` covers the
+concrete case that came up in practice). These return if §13.3–§13.5, Phase 5, or real use
+motivate them.
 
-Config in files: built-in encoder profiles (`csm/profiles.toml`), overridable at
-`~/.config/csm/config.toml` and `GAMEDIR/csm.yaml`; host defaults; `GAMEDIR/metadata.yaml`
-unchanged. Everything per-run stays on the command line.
+### 12.1 `GAMEDIR/csm.yaml` — persisted render settings
+
+Built in Phase 4, once `--field-cutoff` made "retype four numbers on every command against
+this game" a real annoyance. Same override layering as `sync.yaml`'s offsets: the file
+provides the default, an explicit CLI flag on any given command still wins for that one run.
+
+```yaml
+field_cutoff: {1: 880, 2: 910, 3: 800, 4: 845}
+crf: 25
+preset: fast
+```
+
+`field_cutoff` applies to both `render` and `preview` (it changes the actual composite,
+same in both). `crf`/`preset` apply to `render`'s `final-h265` profile and become
+`--sweep`'s baseline for any dimension not explicitly swept over — not to plain `preview`'s
+fast preview-encoder path, which is deliberately fixed/quick and unrelated to final-quality
+tuning. Written by hand today; no `csm ... --write-defaults` yet.
 
 `--dry-run` emits a `set -euo pipefail` script generated with `shlex.join(argv)` — so the
 printed script is *provably* the same command, not a re-derivation. This preserves the
@@ -1176,6 +1273,28 @@ first, before the feature, once building it — that's what makes chunking safe 
 **Why cheap to defer:** none of Phases 1–4 depend on it. `plan.py` already separates "what
 jobs to run" from "how to execute them," so adding a chunked planner later is additive, not
 a rewrite.
+
+### 13.6 `aq-strength` below 0.3, and making it a real option
+
+Phase 4's real `--sweep aq-strength=...` run against the worst-case-turf game (2026-04-19)
+found a genuine, favorable, roughly linear tradeoff, unlike `psy-rd` (flat, no real effect
+in the same test): 1.0→0.3 shrank the file ~13% for a 0.26 VMAF point cost, with no sign of
+a cliff by 0.3. `aq-strength` moved to `0.3` as the new default (§7.2) on that evidence, but
+only four points were measured (1.0/0.8/0.5/0.3), all at CRF 23.
+
+- **Test values below 0.3.** The trend held all the way down to the lowest value tried; where
+  it actually stops being a good trade is unmeasured. Worth another `--sweep aq-strength=...`
+  pass before assuming 0.3 is the true optimum rather than just "as far as we happened to
+  test."
+- **Make it a real CLI/`csm.yaml` option**, the same way `--crf`/`--preset` already are
+  (§12.1) rather than a fixed value in `_final_h265_args`. `psy_rd`/`aq_strength` are already
+  threaded through `sweep_args` for `--sweep`; the remaining work is the same pattern already
+  built for crf/preset — thread them through `final_h265_profile()`, add `--aq-strength`/
+  `--psy-rd` flags, and let `GAMEDIR/csm.yaml` persist them.
+- **Trigger to build the option:** as soon as a specific game's footage seems to want a
+  different value than the global default — e.g. unusually uniform (low-motion, evenly-lit)
+  content where a still-lower value might win more, or content where 0.3 turns out to be
+  already too aggressive.
 
 ---
 
@@ -1390,7 +1509,7 @@ replacement has been validated on real footage.
 | **1** — headline feature, zero render risk — **done** (`acc8980`) | **Spike first (§6.0):** raw GCC-PHAT against the two archived games, checked against ground truth. Only if that validates, build `csm probe` + `csm sync` (PHAT-only, creation-time hint, weighted-solve topology, manual `--clap-at`) and confirm against the same two games. Writes `sync.yaml`; add an `--offsets-seconds` entry point to the legacy script so it consumes them. Frame-hunting stops immediately; the render path is untouched. If the spike doesn't validate, stop here — manual sync continues and the rest of this phase isn't built. | 1–9           |
 | **2** — new pipeline, single process — **done** (`5d60742`) | `timeline`/`filtergraph`/`plan`/`runner`, one ffmpeg job, both intermediate passes deleted, 4K default, color-range fix, missing/short cameras working, `final-h265` only.                                                                                                      | 10–21, 26, 27 |
 | **3** — preview and polish — **done** (`6b80188`) | `--preview`, `--sweep` (with VMAF/xpsnr scoring), `--dry-run`. Small, and what makes phase 4 safe to iterate on.                                                                                                                                                                | 23–25         |
-| **4** — quality and droplet                | Run the sweep on real footage, lock CRF/preset for `final-h265`, record in README. Droplet: fix §14.1's bugs, build the `droplet-run.sh` orchestrator with three-layer self-destruct safety (no snapshot/cloud-init yet — see §14.2).                                          | —             |
+| **4** — quality and droplet — **quality half done** (`c5fbf74`) | Run the sweep on real footage, lock CRF/preset for `final-h265`, record in README — done, plus `--field-cutoff`, `GAMEDIR/csm.yaml` persistence, and `--upload-mbps`, none of which were in the original phase scope but came directly out of real footage testing. Droplet: fix §14.1's bugs, build the `droplet-run.sh` orchestrator with three-layer self-destruct safety (no snapshot/cloud-init yet — see §14.2) — **not started**.                                          | —             |
 | **5** — Apple Silicon                      | Re-benchmark on arrival, re-tune `host.py`. Reconsider `final-av1`/`draft-vt` (§7.5) now that AV1 gets local playback, and reconsider chunking (§13.5) and droplet snapshot/cloud-init (§14.2) if either is still worth building.                                              | —             |
 
 Chunked encoding (§13.5), the envelope cross-method (§13.3), and automatic clap-detection

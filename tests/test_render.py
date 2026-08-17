@@ -162,7 +162,7 @@ def test_field_cutoff_blurs_top_strip():
     statements = graph.filter_complex.split(";")
     cam1_statements = [s for s in statements if "c1" in s or s.endswith("[v1]")]
 
-    assert any("crop=w=1920:h=280:x=0:y=0" in s and "gblur=sigma=20" in s for s in cam1_statements)
+    assert any("crop=w=1920:h=280:x=0:y=0" in s and "gblur=sigma=2" in s for s in cam1_statements)
     assert any("crop=w=1920:h=800:x=0:y=280" in s for s in cam1_statements)
     assert any(s.startswith("[c1top][c1bot]vstack=inputs=2") for s in cam1_statements)
     final_stmt = next(s for s in cam1_statements if s.endswith("[v1]"))

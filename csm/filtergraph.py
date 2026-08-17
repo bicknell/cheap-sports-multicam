@@ -123,7 +123,7 @@ def _video_chain(idx: int, track: Track, timeline: Timeline) -> tuple[InputRef |
             statements.append(entry + ",".join(pre_ops) + f"[c{cam}pre]")
             entry = f"[c{cam}pre]"
         statements.append(f"{entry}split=2[c{cam}full][c{cam}crop]")
-        statements.append(f"[c{cam}full]crop=w={w}:h={top_h}:x=0:y=0,gblur=sigma=20[c{cam}top]")
+        statements.append(f"[c{cam}full]crop=w={w}:h={top_h}:x=0:y=0,gblur=sigma=2[c{cam}top]")
         statements.append(f"[c{cam}crop]crop=w={w}:h={cutoff}:x=0:y={top_h}[c{cam}bot]")
         statements.append(f"[c{cam}top][c{cam}bot]vstack=inputs=2[c{cam}cut]")
         statements.append(f"[c{cam}cut]" + ",".join(post_ops) + f"[v{cam}]")

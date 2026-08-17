@@ -5,12 +5,12 @@ one tripod, 3+4 on the other, tiled 2x2 with camera 1 top-left). Works with
 any camera brand, resolution, or frame rate — nothing here assumes a
 specific model.
 
-**Status: Phase 1.** `csm probe` and `csm sync` are implemented and
-validated against real archived games. The render pipeline itself
-(`csm render`, `csm preview`) hasn't been rewritten yet — for now, feed
-`csm sync`'s output into `legacy/generate-ffmpeg.py` (see below). See
-`../docs/DESIGN.md` for the full plan and `SYNCHRONIZATION.md` for how the sync
-detection actually works.
+**See [`../docs/REFERENCE.md`](../docs/REFERENCE.md) for the complete
+reference** — every command and flag, directory layout, how to run a quality
+sweep on your own footage, and what to do if automatic sync can't find the
+sync point. This file is just a quick pointer. `SYNCHRONIZATION.md` covers
+how the sync detection actually works, and `../docs/DESIGN.md` has the full
+design and the reasoning behind it.
 
 ## Setup
 
@@ -41,63 +41,19 @@ others — both are handled, not treated as errors.
 
 ## Usage
 
-**Inspect footage:**
-
 ```
-csm probe GAMEDIR
-csm probe GAMEDIR --audio      # per-camera audio levels (volumedetect)
-csm probe GAMEDIR --json
+csm probe GAMEDIR                          # sanity-check the footage
+csm sync  GAMEDIR --write                  # detect offsets, writes GAMEDIR/sync.yaml
+csm preview GAMEDIR                        # optional: 60s sample, watch before committing
+csm render GAMEDIR                         # writes GAMEDIR/final_video.mp4
 ```
-
-Reports resolution, fps, codec, duration, and audio presence per camera, and
-flags problems (segments that disagree on size/fps/codec, an audio-cam
-missing its audio stream, likely dropped frames, A/V duration drift).
-
-**Detect sync offsets:**
-
-```
-csm sync GAMEDIR --write
-```
-
-Prints each camera's offset (seconds, relative to camera 1) and writes
-`GAMEDIR/sync.yaml`. Useful flags:
-
-- `--clap-at MM:SS` — anchor the cross-tripod measurement on a deliberate
-  clap/clapperboard at that timestamp (camera 1's clock), for near-exact
-  sync instead of the statistical average. Clap at midfield, after all four
-  cameras are rolling — see `SYNCHRONIZATION.md` for why that placement is
-  the whole point.
-- `--offset N=SEC` — override a camera's offset outright (`sync.yaml` and
-  any measurement are ignored for that camera).
-- `--nudge N=+-SEC` — add a small correction on top of whatever offset is
-  currently in effect.
-- `--no-time-prior` — force blind search everywhere, ignoring `creation_time`
-  tags (mostly useful for testing).
-- `--min-confidence`, `--max-offset`, `--sync-windows`, `--sync-window-len`,
-  `--prior-window`, `--prior-tolerance` — tune the search; defaults match
-  `../docs/DESIGN.md` Sec 12.
 
 `sync.yaml` is meant to be read and edited by a human: it records not just
 the final offsets but every measurement, its confidence, and any
 disagreement with the camera clocks, so a bad auto-sync is diagnosable
-rather than mysterious.
-
-**Render (bridge to the legacy script, until Phase 2):**
-
-```
-csm sync GAMEDIR --write
-legacy/generate-ffmpeg.py --offsets-seconds "$(python3 -c "
-import yaml
-d = yaml.safe_load(open('GAMEDIR/sync.yaml'))
-print(','.join(str(d['cameras'][c]['offset']) for c in (1,2,3,4)))
-")" -s GAMEDIR > /tmp/runme.sh
-less /tmp/runme.sh   # inspect before running, as always
-```
-
-`--offsets-seconds CAM1,CAM2,CAM3,CAM4` on the legacy script accepts exactly
-the offsets `csm sync` computes, skipping the old manual frame-hunting step
-entirely. `-s`/`--scale` is still required today — see the root `README.md`
-for why.
+rather than mysterious. See `../docs/REFERENCE.md` for every flag on every
+command, including how to run a quality sweep (`csm preview --sweep
+crf=...`) and what to do if `csm sync` can't find a sync point on its own.
 
 ## Tests
 
@@ -114,11 +70,20 @@ ffmpeg/ffprobe pipeline without needing real footage.
 
 ```
 csm/
-  cli.py       argparse subcommands
-  ffmpeg.py    locate/run ffmpeg+ffprobe, version gate, FfmpegError
-  probe.py     ffprobe -> per-segment info, cross-segment validation
-  sources.py   camera discovery, segment ordering, metadata.yaml
-  sync.py      GCC-PHAT, creation_time hints, topology solve, sync.yaml
+  cli.py         argparse subcommands (probe, sync, render, preview)
+  ffmpeg.py      locate/run ffmpeg+ffprobe, version gate, capability probing
+  probe.py       ffprobe -> per-segment info, cross-segment validation
+  sources.py     camera discovery, segment ordering, metadata.yaml
+  sync.py        GCC-PHAT, creation_time hints, topology solve, sync.yaml
+  timeline.py    per-camera Track model, alignment math
+  filtergraph.py PURE: Timeline -> ffmpeg -filter_complex string
+  encoders.py    encoder profiles (final-h265, preview, sweep variants)
+  plan.py        Timeline + profile -> FfmpegJob(s)
+  runner.py      the only module that touches the filesystem / spawns ffmpeg
+  preview.py     preview window resolution + plan building
+  sweep.py       --sweep implementation
+  render_config.py  GAMEDIR/csm.yaml -- persisted field_cutoff/crf/preset
+  host.py        host capability detection
 ```
 
 `sync.py` is the interesting part — see `SYNCHRONIZATION.md`.

@@ -1,5 +1,8 @@
 # Recording Soccer
 
+*Sport-specific observations, may be stale. The software itself makes no
+assumptions about sport — see [../docs/REFERENCE.md](REFERENCE.md) for that.*
+
 # Diagram
 
 Two tripods, each with two cameras.  Each color shows the approximate field of

@@ -18,7 +18,13 @@ class EncoderProfile:
         return self.build_args(timeline)
 
 
-def _final_h265_args(timeline: Timeline) -> list[str]:
+DEFAULT_CRF = "23"
+DEFAULT_PRESET = "fast"
+DEFAULT_PSY_RD = "2.0"
+DEFAULT_AQ_STRENGTH = "0.3"
+
+
+def _final_h265_args(timeline: Timeline, *, crf: str, preset: str) -> list[str]:
     gop = 2 * round(float(timeline.fps))
     # colorprim/transfer/colormatrix/range are repeated here in
     # -x265-params, not just the generic -color_* flags below: on this
@@ -28,7 +34,8 @@ def _final_h265_args(timeline: Timeline) -> list[str]:
     # The -x265-params form is what actually round-trips all four tags.
     x265_params = (
         f"keyint={gop}:min-keyint={gop}:no-open-gop=1:repeat-headers=1:"
-        f"aq-mode=3:aq-strength=1.0:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=40:ref=4:"
+        f"aq-mode=3:aq-strength={DEFAULT_AQ_STRENGTH}:psy-rd={DEFAULT_PSY_RD}:psy-rdoq=1.0:"
+        f"rc-lookahead=40:ref=4:"
         f"colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"
     )
     # A +0.5-frame epsilon on -t: ffmpeg's output truncation drops the
@@ -36,7 +43,7 @@ def _final_h265_args(timeline: Timeline) -> list[str]:
     # equal to nb_frames/fps yields nb_frames-1; a small excess doesn't).
     duration = timeline.duration + 0.5 / float(timeline.fps)
     return [
-        "-c:v", "libx265", "-preset", "medium", "-crf", "23",
+        "-c:v", "libx265", "-preset", preset, "-crf", crf,
         "-pix_fmt", "yuv420p10le", "-profile:v", "main10",
         "-x265-params", x265_params,
         "-color_primaries", "bt709", "-color_trc", "bt709",
@@ -48,7 +55,19 @@ def _final_h265_args(timeline: Timeline) -> list[str]:
     ]
 
 
-FINAL_H265 = EncoderProfile(name="final-h265", build_args=_final_h265_args)
+def final_h265_profile(*, crf: str = DEFAULT_CRF, preset: str = DEFAULT_PRESET) -> EncoderProfile:
+    """CRF/preset picked via a real --sweep (Sec 7.2) can be persisted per
+    game in GAMEDIR/csm.yaml rather than retyped on every render -- this
+    builds a fresh profile with those values baked in, instead of the one
+    fixed FINAL_H265 instance. Name stays "final-h265" either way; only the
+    tuning underneath changes."""
+    return EncoderProfile(
+        name="final-h265",
+        build_args=lambda timeline: _final_h265_args(timeline, crf=crf, preset=preset),
+    )
+
+
+FINAL_H265 = final_h265_profile()
 
 
 def _preview_common_args(timeline: Timeline) -> list[str]:
@@ -96,28 +115,62 @@ def get_profile(name: str) -> EncoderProfile:
 
 SWEEP_ENCODERS = ("libx265", "libsvtav1")
 
+# SVT-AV1's -preset is a bare number (0-13, lower = slower/better), not a
+# named string like x265's -- unlike x265, ffmpeg does not accept
+# "fast"/"medium" here at all (it fails at encoder-open time, not with a
+# helpful error). Named presets stay usable across both encoders in a
+# shared --sweep preset=... dimension (Sec 7.3's own example) by mapping
+# to the numeric preset x265's equivalent name roughly corresponds to; 6
+# for "medium" matches Sec 7.5's own reference SVT-AV1 invocation.
+_SVTAV1_PRESET_ALIASES = {
+    "veryslow": "2", "slow": "4", "medium": "6", "fast": "8",
+    "veryfast": "10", "ultrafast": "12",
+}
+
+
+def _svtav1_preset(preset: str) -> str:
+    if preset.lstrip("-").isdigit():
+        return preset
+    try:
+        return _SVTAV1_PRESET_ALIASES[preset]
+    except KeyError:
+        raise ValueError(
+            f"unknown SVT-AV1 preset: {preset!r} -- pass a number (0-13, lower=slower/better "
+            f"quality) or one of {sorted(_SVTAV1_PRESET_ALIASES)}"
+        )
+
 
 def sweep_args(
-    timeline: Timeline, *, encoder: str = "libx265", crf: str = "23", preset: str = "medium",
+    timeline: Timeline, *, encoder: str = "libx265", crf: str = DEFAULT_CRF, preset: str = DEFAULT_PRESET,
+    psy_rd: str = DEFAULT_PSY_RD, aq_strength: str = DEFAULT_AQ_STRENGTH,
 ) -> list[str]:
-    """Sec 7.3: `--sweep encoder=...,crf=...,preset=...` -- variant output
-    args built the same shape as the real profiles above, so measured
-    numbers transfer directly to a real EncoderProfile."""
+    """Sec 7.3: `--sweep encoder=...,crf=...,preset=...,psy-rd=...,aq-strength=...`
+    -- variant output args built the same shape as the real profiles above
+    (including the same aq-mode/psy-rd/rc-lookahead/ref tuning as
+    final-h265, not just keyint), so measured numbers transfer directly to
+    a real EncoderProfile. psy_rd/aq_strength only apply to libx265 --
+    SVT-AV1's tuning knobs are a different set entirely, out of scope
+    here."""
     duration = timeline.duration + 0.5 / float(timeline.fps)
     if encoder == "libsvtav1":
         gop = 4 * round(float(timeline.fps))
         video = [
-            "-c:v", "libsvtav1", "-preset", preset, "-crf", crf,
+            "-c:v", "libsvtav1", "-preset", _svtav1_preset(preset), "-crf", crf,
             "-pix_fmt", "yuv420p10le",
             "-svtav1-params", f"keyint={gop}:scd=0",
             "-tag:v", "av01",
         ]
     elif encoder == "libx265":
         gop = 2 * round(float(timeline.fps))
+        x265_params = (
+            f"keyint={gop}:min-keyint={gop}:no-open-gop=1:repeat-headers=1:"
+            f"aq-mode=3:aq-strength={aq_strength}:psy-rd={psy_rd}:psy-rdoq=1.0:"
+            f"rc-lookahead=40:ref=4"
+        )
         video = [
             "-c:v", "libx265", "-preset", preset, "-crf", crf,
             "-pix_fmt", "yuv420p10le", "-profile:v", "main10",
-            "-x265-params", f"keyint={gop}:min-keyint={gop}:no-open-gop=1:repeat-headers=1",
+            "-x265-params", x265_params,
             "-tag:v", "hvc1",
         ]
     else:

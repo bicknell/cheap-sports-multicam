@@ -1,5 +1,9 @@
 # Cameras
 
+*Hardware-specific observations, may be stale. The software itself makes no
+assumptions about camera brand, resolution, or frame rate — see
+[../docs/REFERENCE.md](REFERENCE.md) for that.*
+
 No action camera is perfect, this document attempts to document the pros and
 cons, and known issues with various models to help you make an informed 
 decision.  If you use a different camera, please provide feedback

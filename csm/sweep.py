@@ -3,7 +3,9 @@
 lossless reference, scores each variant against the reference with
 libvmaf (preferred) -> xpsnr -> ssim -- whichever `check_capabilities()`
 finds first -- and reports wall time, file size, extrapolated full-game
-size, and extrapolated upload time at 40 Mbps.
+size, and extrapolated upload time at a configurable connection speed
+(DEFAULT_UPLOAD_MBPS unless overridden -- everyone's upload speed differs
+and changes over time, so this is never assumed silently).
 """
 from __future__ import annotations
 
@@ -22,7 +24,7 @@ from csm.plan import FfmpegJob
 from csm.preview import resolve_windows
 from csm.timeline import Timeline
 
-UPLOAD_MBPS = 40
+DEFAULT_UPLOAD_MBPS = 40.0
 
 
 def parse_sweep_specs(specs: list[str]) -> dict[str, list[str]]:
@@ -102,6 +104,9 @@ def run_sweep(
     at: list[str],
     seconds: float,
     output_dir: Path,
+    upload_mbps: float = DEFAULT_UPLOAD_MBPS,
+    default_crf: str = encoders.DEFAULT_CRF,
+    default_preset: str = encoders.DEFAULT_PRESET,
 ) -> list[SweepResult]:
     label, t0, t1 = resolve_windows(timeline, at or ["middle"], seconds)[0]
     window_tl = dataclasses.replace(timeline, t0=t0, t1=t1)
@@ -117,8 +122,10 @@ def run_sweep(
         args = encoders.sweep_args(
             window_tl,
             encoder=overrides.get("encoder", "libx265"),
-            crf=overrides.get("crf", "23"),
-            preset=overrides.get("preset", "medium"),
+            crf=overrides.get("crf", default_crf),
+            preset=overrides.get("preset", default_preset),
+            psy_rd=overrides.get("psy-rd", encoders.DEFAULT_PSY_RD),
+            aq_strength=overrides.get("aq-strength", encoders.DEFAULT_AQ_STRENGTH),
         )
         job = FfmpegJob(graph=build_filtergraph(window_tl), output_args=args, output_path=output_path)
 
@@ -129,7 +136,7 @@ def run_sweep(
         size = output_path.stat().st_size
         ratio = timeline.duration / window_tl.duration
         extrapolated_bytes = size * ratio
-        upload_seconds = extrapolated_bytes * 8 / (UPLOAD_MBPS * 1_000_000)
+        upload_seconds = extrapolated_bytes * 8 / (upload_mbps * 1_000_000)
 
         variant_score, metric = score(tool, capabilities, output_path, reference_path)
         results.append(SweepResult(
@@ -140,12 +147,13 @@ def run_sweep(
     return results
 
 
-def format_results(results: list[SweepResult]) -> str:
+def format_results(results: list[SweepResult], upload_mbps: float = DEFAULT_UPLOAD_MBPS) -> str:
+    lines = [f"upload(h) assumes {upload_mbps:g} Mbps -- override with --upload-mbps"]
     header = (
         f"{'variant':<30} {'wall(s)':>8} {'size(MB)':>9} {'full(GB)':>9} "
         f"{'upload(h)':>10} {'score':>8} {'metric':>7}"
     )
-    lines = [header]
+    lines.append(header)
     for r in results:
         score_str = f"{r.score:.2f}" if r.score is not None else "n/a"
         lines.append(

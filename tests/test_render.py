@@ -8,13 +8,15 @@ resolutions; `pytest -m "not slow"` skips these for the on-every-save loop.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
+from collections import namedtuple
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
-from csm import cli, encoders, ffmpeg as ffmpeg_mod, plan, probe, runner, sources
+from csm import cli, encoders, ffmpeg as ffmpeg_mod, plan, probe, render_config, runner, sources
 from csm import timeline as timeline_mod
 from csm.filtergraph import build_filtergraph
 from csm.timeline import Timeline, Track
@@ -23,14 +25,19 @@ from csm.timeline import Timeline, Track
 # --------------------------------------------------------------- helpers --
 
 def _track(cam, *, present=True, start=0.0, duration=10.0, width=1920, height=1080,
-           fps=Fraction(30), has_audio=True):
+           fps=Fraction(30), has_audio=True, clip_durations=None, field_cutoff=None):
     if not present:
-        return Track(cam=cam, present=False, clips=[], start=start, duration=None,
-                      width=0, height=0, fps=Fraction(30), has_audio=False,
+        return Track(cam=cam, present=False, clips=[], clip_durations=[], start=start,
+                      duration=None, width=0, height=0, fps=Fraction(30), has_audio=False,
                       sample_rate=0, channels=0)
-    return Track(cam=cam, present=True, clips=[Path(f"/fake/cam{cam}.mp4")], start=start,
+    if clip_durations is None:
+        clips = [Path(f"/fake/cam{cam}.mp4")]
+        clip_durations = [duration]
+    else:
+        clips = [Path(f"/fake/cam{cam}_{i}.mp4") for i in range(len(clip_durations))]
+    return Track(cam=cam, present=True, clips=clips, clip_durations=clip_durations, start=start,
                  duration=duration, width=width, height=height, fps=fps,
-                 has_audio=has_audio, sample_rate=48000, channels=1)
+                 has_audio=has_audio, sample_rate=48000, channels=1, field_cutoff=field_cutoff)
 
 
 def _timeline(tracks, t0=0.0, t1=10.0, out_w=3840, out_h=2160, fps=Fraction(30),
@@ -117,6 +124,56 @@ def test_timeline_fragments():
     assert cam4_chain == "[3:v]format=yuv420p,setsar=1[v4]"
 
 
+def test_head_trim_prunes_leading_segments():
+    """A deep head-trim must not decode the camera's whole history: whole
+    leading segment files are dropped from the concat list, and only the
+    residual within the first remaining segment is decoded and cut. This
+    is what keeps --preview windows deep into a long game fast (regression
+    for the bug found while testing preview on real footage: a naive
+    trim=start=head decoded 48+ minutes to reach a 60s window)."""
+    tracks = [
+        _track(1, start=0.0, duration=30.0, clip_durations=[10.0, 10.0, 10.0]),
+        _track(2, present=False),
+        _track(3, present=False),
+        _track(4, present=False),
+    ]
+    # head = t0 - start = 23 -- inside the 3rd segment (skips the first two).
+    tl = _timeline(tracks, t0=23.0, t1=30.0, audio_cams=(2, 4))
+    graph = build_filtergraph(tl)
+
+    cam1_ref = graph.inputs[0]
+    assert cam1_ref.kind == "concat"
+    assert [c.name for c in cam1_ref.clips] == ["cam1_2.mp4"]
+    cam1_chain = next(c for c in graph.filter_complex.split(";") if "[v1]" in c)
+    assert "trim=start=3.000000" in cam1_chain
+
+
+def test_field_cutoff_blurs_top_strip():
+    """--field-cutoff N=PIXELS: everything above the cutoff (native res,
+    measured from the bottom) is split off, cropped, and blurred before
+    the normal scale/pad chain; the bottom (field) strip and the rest of
+    the chain are untouched. No cutoff -> single comma-chain, unchanged
+    from before this feature existed (regression guard)."""
+    tracks = [_track(c, width=1920, height=1080) for c in (1, 2, 3, 4)]
+    tracks[0] = _track(1, width=1920, height=1080, field_cutoff=800)
+    tl = _timeline(tracks, out_w=3840, out_h=2160)
+    graph = build_filtergraph(tl)
+
+    statements = graph.filter_complex.split(";")
+    cam1_statements = [s for s in statements if "c1" in s or s.endswith("[v1]")]
+
+    assert any("crop=w=1920:h=280:x=0:y=0" in s and "gblur=sigma=20" in s for s in cam1_statements)
+    assert any("crop=w=1920:h=800:x=0:y=280" in s for s in cam1_statements)
+    assert any(s.startswith("[c1top][c1bot]vstack=inputs=2") for s in cam1_statements)
+    final_stmt = next(s for s in cam1_statements if s.endswith("[v1]"))
+    assert final_stmt.startswith("[c1cut]")
+
+    # cam2 has no cutoff -- untouched, still a single comma-chain.
+    cam2_chain = next(c for c in graph.filter_complex.split(";") if c.endswith("[v2]"))
+    assert cam2_chain.startswith("[1:v]")
+    assert "split=2" not in cam2_chain
+
+
 # ---------------------------------------------------------- test 18 -------
 
 def test_scale_skipped_when_source_matches_tile():
@@ -145,6 +202,100 @@ def test_gop_scales_with_fps():
     args30 = encoders.get_profile("final-h265").output_args(tl30)
     x265_params30 = args30[args30.index("-x265-params") + 1]
     assert "keyint=60:min-keyint=60" in x265_params30
+
+
+def test_sweep_svtav1_preset_accepts_names_and_numbers():
+    """Regression: ffmpeg's libsvtav1 -preset is a bare number, not a named
+    string like x265's -- passing 'fast' straight through (as --sweep
+    preset=fast,medium does for both encoders alike, Sec 7.3's own
+    example) crashed with 'Undefined constant ... in fast' at encoder-open
+    time. Named presets must map to a number for svtav1; numbers pass
+    through unchanged."""
+    tracks = [_track(c) for c in (1, 2, 3, 4)]
+    tl = _timeline(tracks)
+
+    args = encoders.sweep_args(tl, encoder="libsvtav1", crf="30", preset="medium")
+    assert args[args.index("-preset") + 1] == "6"
+
+    args_numeric = encoders.sweep_args(tl, encoder="libsvtav1", crf="30", preset="8")
+    assert args_numeric[args_numeric.index("-preset") + 1] == "8"
+
+    with pytest.raises(ValueError, match="unknown SVT-AV1 preset"):
+        encoders.sweep_args(tl, encoder="libsvtav1", crf="30", preset="bogus")
+
+
+def test_sweep_x265_matches_production_tuning():
+    """sweep_args' libx265 branch must carry the same aq-mode/psy-rd/
+    rc-lookahead/ref tuning as the real final-h265 profile (it originally
+    didn't -- only keyint -- so sweep numbers weren't representative of
+    what csm render actually produces). psy-rd/aq-strength are overridable
+    per Sec 7.3's --sweep psy-rd=...,aq-strength=... ; everything else
+    stays fixed."""
+    tracks = [_track(c) for c in (1, 2, 3, 4)]
+    tl = _timeline(tracks)
+
+    args = encoders.sweep_args(tl, encoder="libx265", crf="23", preset="medium")
+    params = args[args.index("-x265-params") + 1]
+    assert "aq-mode=3" in params
+    assert f"psy-rd={encoders.DEFAULT_PSY_RD}" in params
+    assert f"aq-strength={encoders.DEFAULT_AQ_STRENGTH}" in params
+    assert "rc-lookahead=40" in params
+    assert "ref=4" in params
+
+    tuned = encoders.sweep_args(
+        tl, encoder="libx265", crf="23", preset="medium", psy_rd="0.5", aq_strength="0.6",
+    )
+    tuned_params = tuned[tuned.index("-x265-params") + 1]
+    assert "psy-rd=0.5" in tuned_params
+    assert "aq-strength=0.6" in tuned_params
+
+
+def test_render_config_missing_file_is_empty(tmp_path):
+    config = render_config.load_render_config(tmp_path)
+    assert config.field_cutoff == {}
+    assert config.crf is None
+    assert config.preset is None
+
+
+def test_render_config_parses_csm_yaml(tmp_path):
+    (tmp_path / "csm.yaml").write_text(
+        "field_cutoff: {1: 880, 2: 910}\ncrf: '25'\npreset: medium\n"
+    )
+    config = render_config.load_render_config(tmp_path)
+    assert config.field_cutoff == {1: 880, 2: 910}
+    assert config.crf == "25"
+    assert config.preset == "medium"
+
+
+def test_resolve_profile_layering():
+    """GAMEDIR/csm.yaml provides the default; an explicit --crf/--preset on
+    the command line still wins for that one run (same override pattern as
+    --offset/--nudge over sync.yaml). A non-final-h265 --profile bypasses
+    persisted crf/preset entirely -- they don't mean the same thing there."""
+    Args = namedtuple("Args", ["profile", "crf", "preset"])
+
+    no_config = render_config.RenderConfig(field_cutoff={})
+    args = Args(profile="final-h265", crf=None, preset=None)
+    profile = cli._resolve_profile(args, no_config)
+    assert profile.name == "final-h265"
+    args_out = profile.output_args(_timeline([_track(c) for c in (1, 2, 3, 4)]))
+    assert args_out[args_out.index("-crf") + 1] == encoders.DEFAULT_CRF
+    assert args_out[args_out.index("-preset") + 1] == encoders.DEFAULT_PRESET
+
+    persisted = render_config.RenderConfig(field_cutoff={}, crf="25", preset="medium")
+    profile = cli._resolve_profile(Args(profile="final-h265", crf=None, preset=None), persisted)
+    args_out = profile.output_args(_timeline([_track(c) for c in (1, 2, 3, 4)]))
+    assert args_out[args_out.index("-crf") + 1] == "25"
+    assert args_out[args_out.index("-preset") + 1] == "medium"
+
+    # explicit CLI flag wins over the persisted value
+    profile = cli._resolve_profile(Args(profile="final-h265", crf="21", preset=None), persisted)
+    args_out = profile.output_args(_timeline([_track(c) for c in (1, 2, 3, 4)]))
+    assert args_out[args_out.index("-crf") + 1] == "21"
+    assert args_out[args_out.index("-preset") + 1] == "medium"
+
+    other = cli._resolve_profile(Args(profile="preview-x265", crf="99", preset=None), persisted)
+    assert other.name == "preview-x265"
 
 
 # ---------------------------------------------------------- test 26 -------
@@ -249,6 +400,77 @@ def test_render_head_trim(tool, synthetic_game, tmp_path):
     assert int(vstream["nb_frames"]) > 0
     assert astream["channels"] == 2
     assert abs(float(data["format"]["duration"]) - 6.0) < (1 / 30) * 2
+
+
+@pytest.mark.slow
+def test_render_head_trim_prunes_segments(tool, synthetic_game, tmp_path):
+    """Real-ffmpeg counterpart to test_head_trim_prunes_leading_segments:
+    cam1 is 3 segments of 4s each (12s total), offset -6s, so head=6 falls
+    inside the 2nd segment -- the 1st segment must be dropped from the
+    concat list entirely and the render must still be correct."""
+    game = synthetic_game({1: -6.0, 2: 0.0, 3: 0.0, 4: 0.0},
+                           {1: 12.0, 2: 6.0, 3: 6.0, 4: 6.0}, segments=3)
+    output, tl = _render(tool, game, {1: -6.0, 2: 0.0, 3: 0.0, 4: 0.0}, tmp_path)
+    cam1_track = tl.track(1)
+    assert len(cam1_track.clips) == 3
+
+    data = _ffprobe_json(output)
+    vstream = next(s for s in data["streams"] if s["codec_type"] == "video")
+    astream = next(s for s in data["streams"] if s["codec_type"] == "audio")
+    assert int(vstream["nb_frames"]) > 0
+    assert astream["channels"] == 2
+    assert abs(float(data["format"]["duration"]) - 6.0) < (1 / 30) * 2
+
+
+def _psnr_region(a: Path, b: Path, *, w: int, h: int, x: int, y: int) -> float:
+    argv = [
+        "ffmpeg", "-hide_banner", "-i", str(a), "-i", str(b),
+        "-lavfi",
+        f"[0:v]crop={w}:{h}:{x}:{y}[x];[1:v]crop={w}:{h}:{x}:{y}[y];[x][y]psnr",
+        "-f", "null", "-",
+    ]
+    result = subprocess.run(argv, capture_output=True, text=True)
+    m = re.search(r"average:(inf|[\d.]+)", result.stderr)
+    assert m, result.stderr
+    return float(m.group(1))
+
+
+@pytest.mark.slow
+def test_field_cutoff_real_render(tool, tmp_path):
+    """--field-cutoff, verified against real ffmpeg: the region above the
+    cutoff must be measurably blurred relative to a render without any
+    cutoff, while the region below it (and the rest of the frame) must be
+    essentially unchanged. synthetic_game's flat-gray fixture has nothing
+    to blur, so this builds a testsrc2 camera directly (real fine detail:
+    moving gradients, patterns) at exactly the tile size, so quadrant
+    pixels map 1:1 to native-resolution pixels with no scale/pad in the
+    way."""
+    game = tmp_path / "game"
+    cam_dir = game / "camera1"
+    cam_dir.mkdir(parents=True)
+    seg = cam_dir / "NORM_00001.MP4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+         "-i", "testsrc2=size=640x360:rate=30:duration=2",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(seg)],
+        check=True,
+    )
+    for cam in (2, 3, 4):
+        (game / f"camera{cam}").mkdir(parents=True, exist_ok=True)
+
+    baseline, _ = _render(tool, game, {1: 0.0}, tmp_path, out_w=1280, out_h=720)
+    baseline_path = tmp_path / "baseline.mp4"
+    baseline.rename(baseline_path)
+    cutoff_out, tl = _render(
+        tool, game, {1: 0.0}, tmp_path, out_w=1280, out_h=720, field_cutoffs={1: 180},
+    )
+
+    # cam1 is top-left, tile 640x360, cutoff=180 splits it evenly.
+    top_psnr = _psnr_region(baseline_path, cutoff_out, w=640, h=180, x=0, y=0)
+    bottom_psnr = _psnr_region(baseline_path, cutoff_out, w=640, h=180, x=0, y=180)
+
+    assert bottom_psnr > 35.0
+    assert top_psnr < bottom_psnr - 5.0
 
 
 @pytest.mark.slow

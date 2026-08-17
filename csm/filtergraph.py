@@ -36,6 +36,27 @@ class FilterGraph:
     audio_out_label: str = "outa"
 
 
+def _prune_leading_segments(track: Track, head: float) -> tuple[tuple[Path, ...], float]:
+    """head>0 trims from the start of the camera's full recording. Decoding
+    that whole span every time is fine for a full render (head is at most
+    the camera-to-camera sync offset) but catastrophic for a --preview
+    window deep into a long game, where head also includes the window's
+    own position into the game -- decoding from the true start of the
+    recording to reach it can mean tens of minutes of throwaway decode.
+    Skip whole leading segment *files* first (free -- fewer -i entries, no
+    seeking at all), so the in-graph trim below only ever has to decode at
+    most one segment's worth, not the camera's whole history."""
+    cumulative = 0.0
+    skip = 0
+    for d in track.clip_durations:
+        if cumulative + d <= head:
+            cumulative += d
+            skip += 1
+        else:
+            break
+    return tuple(track.clips[skip:]), head - cumulative
+
+
 def _video_chain(idx: int, track: Track, timeline: Timeline) -> tuple[InputRef | None, str]:
     tw, th = timeline.tile
     out_fps = timeline.fps
@@ -49,36 +70,67 @@ def _video_chain(idx: int, track: Track, timeline: Timeline) -> tuple[InputRef |
         return ref, chain
 
     head, tail = head_tail(timeline, track)
-    ref = InputRef(kind="concat", label=f"cam{track.cam}", clips=tuple(track.clips))
-
-    ops: list[str] = []
     if head > 0:
+        clips, residual = _prune_leading_segments(track, head)
+    else:
+        clips, residual = tuple(track.clips), 0.0
+    ref = InputRef(kind="concat", label=f"cam{track.cam}", clips=clips)
+
+    pre_ops: list[str] = []
+    if residual > 0:
         # `-ss` before a concat-demuxer `-i` is unreliable when the source
         # has audio (verified: fails outright, even for tiny offsets, on
         # ffmpeg 9.0.1 -- silent empty output, exit code 0). Trim in-graph
-        # instead: decode from the start and cut here. Frame-accurate and
-        # matches the verified-safe pattern in Sec 3.4.
-        ops.append(f"trim=start={head:.6f}")
-        ops.append("setpts=PTS-STARTPTS")
+        # instead: decode from the start of the (already-pruned) clip list
+        # and cut here. Frame-accurate and matches the verified-safe
+        # pattern in Sec 3.4.
+        pre_ops.append(f"trim=start={residual:.6f}")
+        pre_ops.append("setpts=PTS-STARTPTS")
+
+    post_ops: list[str] = []
     if (track.width, track.height) != (tw, th):
-        ops.append(
+        post_ops.append(
             f"scale={tw}:{th}:force_original_aspect_ratio=decrease:"
             f"flags=lanczos+accurate_rnd:in_range=pc:out_range=tv"
         )
-        ops.append(f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:color=black")
-        ops.append("format=yuv420p")
-        ops.append("setsar=1")
+        post_ops.append(f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2:color=black")
+        post_ops.append("format=yuv420p")
+        post_ops.append("setsar=1")
     else:
-        ops.append("format=yuv420p")
-        ops.append("setsar=1")
+        post_ops.append("format=yuv420p")
+        post_ops.append("setsar=1")
 
-    ops.append(f"fps=fps={out_fps}")
+    post_ops.append(f"fps=fps={out_fps}")
     if head < 0:
-        ops.append(f"tpad=start_duration={-head:.6f}:color=black")
+        post_ops.append(f"tpad=start_duration={-head:.6f}:color=black")
     if tail > 0:
-        ops.append(f"tpad=stop_duration={tail:.6f}:color=black")
+        post_ops.append(f"tpad=stop_duration={tail:.6f}:color=black")
 
-    chain = f"[{idx}:v]" + ",".join(ops) + f"[v{track.cam}]"
+    cam = track.cam
+    cutoff = track.field_cutoff
+    if cutoff is not None and 0 < cutoff < track.height:
+        # Real footage observation: aq-mode/psy-rd spend bits on whatever
+        # looks locally complex, which includes shiny turf texture and
+        # distant background as readily as players. The camera is fixed
+        # for the whole game, so the sky/stands-vs-field boundary is
+        # constant -- pre-blurring the top strip lowers its local
+        # complexity so the encoder naturally spends fewer bits there.
+        w, h = track.width, track.height
+        top_h = h - cutoff
+        statements: list[str] = []
+        entry = f"[{idx}:v]"
+        if pre_ops:
+            statements.append(entry + ",".join(pre_ops) + f"[c{cam}pre]")
+            entry = f"[c{cam}pre]"
+        statements.append(f"{entry}split=2[c{cam}full][c{cam}crop]")
+        statements.append(f"[c{cam}full]crop=w={w}:h={top_h}:x=0:y=0,gblur=sigma=20[c{cam}top]")
+        statements.append(f"[c{cam}crop]crop=w={w}:h={cutoff}:x=0:y={top_h}[c{cam}bot]")
+        statements.append(f"[c{cam}top][c{cam}bot]vstack=inputs=2[c{cam}cut]")
+        statements.append(f"[c{cam}cut]" + ",".join(post_ops) + f"[v{cam}]")
+        chain = ";".join(statements)
+    else:
+        chain = f"[{idx}:v]" + ",".join(pre_ops + post_ops) + f"[v{cam}]"
+
     return ref, chain
 
 
@@ -92,11 +144,15 @@ def _audio_chain(idx: int, track: Track, timeline: Timeline) -> tuple[InputRef |
         return ref, chain
 
     head, tail = head_tail(timeline, track)
-    ref = InputRef(kind="concat", label=f"cam{track.cam}", clips=tuple(track.clips))
+    if head > 0:
+        clips, residual = _prune_leading_segments(track, head)
+    else:
+        clips, residual = tuple(track.clips), 0.0
+    ref = InputRef(kind="concat", label=f"cam{track.cam}", clips=clips)
 
     ops: list[str] = []
-    if head > 0:
-        ops.append(f"atrim=start={head:.6f}")
+    if residual > 0:
+        ops.append(f"atrim=start={residual:.6f}")
         ops.append("asetpts=PTS-STARTPTS")
     ops.append("aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=mono")
     if head < 0:

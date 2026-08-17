@@ -22,6 +22,8 @@ class Track:
     cam: int
     present: bool
     clips: list[Path]
+    clip_durations: list[float]  # per-clip, same order as clips -- lets a head-trim skip
+                                  # whole leading segment files instead of decoding them
     start: float                # position on the common timeline of this camera's own t=0
     duration: float | None
     width: int
@@ -30,6 +32,9 @@ class Track:
     has_audio: bool
     sample_rate: int
     channels: int
+    field_cutoff: int | None = None  # pixels from the bottom (native res) treated as
+                                      # high-priority field; above it gets pre-blurred so
+                                      # aq-mode/psy-rd stop spending bits on sky/stands
 
 
 @dataclass
@@ -54,13 +59,19 @@ class Timeline:
         return next(t for t in self.tracks if t.cam == cam)
 
 
-def build_tracks(cameras: dict[int, CameraInfo], offsets: dict[int, float]) -> list[Track]:
+def build_tracks(
+    cameras: dict[int, CameraInfo],
+    offsets: dict[int, float],
+    field_cutoffs: dict[int, int] | None = None,
+) -> list[Track]:
+    field_cutoffs = field_cutoffs or {}
     tracks = []
     for cam in (1, 2, 3, 4):
         info = cameras.get(cam)
         if info is None or not info.segments:
             tracks.append(Track(
-                cam=cam, present=False, clips=[], start=offsets.get(cam, 0.0),
+                cam=cam, present=False, clips=[], clip_durations=[],
+                start=offsets.get(cam, 0.0),
                 duration=None, width=0, height=0, fps=Fraction(30),
                 has_audio=False, sample_rate=0, channels=0,
             ))
@@ -68,10 +79,12 @@ def build_tracks(cameras: dict[int, CameraInfo], offsets: dict[int, float]) -> l
         first = info.segments[0]
         tracks.append(Track(
             cam=cam, present=True, clips=[s.path for s in info.segments],
+            clip_durations=[s.duration for s in info.segments],
             start=offsets.get(cam, 0.0), duration=info.total_duration,
             width=first.width, height=first.height, fps=first.fps,
             has_audio=info.has_audio,
             sample_rate=first.sample_rate or 48000, channels=first.channels or 1,
+            field_cutoff=field_cutoffs.get(cam),
         ))
     return tracks
 
@@ -89,10 +102,11 @@ def build_timeline(
     start: float | None = None,
     end: float | None = None,
     duration: float | None = None,
+    field_cutoffs: dict[int, int] | None = None,
 ) -> Timeline:
     """Sec 5.1. `--start`/`--end`/`--duration` override the alignment policy
     explicitly; `align_start`/`align_end` pick among the cameras otherwise."""
-    tracks = build_tracks(cameras, offsets)
+    tracks = build_tracks(cameras, offsets, field_cutoffs)
     present = [t for t in tracks if t.present]
     if not present:
         raise ValueError("no cameras present")

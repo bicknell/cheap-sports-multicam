@@ -48,18 +48,34 @@ welcome.***
 
 ## Software
 
-The essential steps are:
+[ffmpeg](https://ffmpeg.org) (7.0+) does the actual video processing; `csm`,
+the Python tool in this repository, figures out how each camera lines up in
+time and generates the right ffmpeg command for you. Quickstart, with every
+default left as-is:
 
-1. Concatinaing the multiple files from the camera into a single video.
-1. Trimming the start of 3 of the 4 videos so that they start at the same
-   moment in time.
-1. Combining the videos into a 2x2 matrix.
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
 
-[ffmpeg](https://ffmpeg.org) is used to perform the video processing.  The
-latest version is highly recommended.
+csm probe GAMEDIR              # sanity-check the footage
+csm sync  GAMEDIR --write      # detect sync offsets, writes GAMEDIR/sync.yaml
+csm preview GAMEDIR            # optional: render a 60s sample first, watch it
+csm render GAMEDIR             # writes GAMEDIR/final_video.mp4
+```
 
-The python scripts (requires python3 and pyyaml) in this repository generate
-the necessary ffmpeg command lines to perform the processing.
+`GAMEDIR` is a directory with `camera1`/`camera2`/`camera3`/`camera4`
+subdirectories, each holding that camera's footage — see
+[docs/REFERENCE.md](docs/REFERENCE.md) for the full layout. That document
+covers everything past the quickstart: every command's flags, how to run a
+quality sweep against your own footage before committing to hours of
+encoding, and what to do if automatic sync can't find the sync point on its
+own. `csm/SYNCHRONIZATION.md` explains how the automatic sync actually works,
+if you're curious.
+
+The old `legacy/generate-ffmpeg.py` script (manual frame-number sync, no
+automatic detection) still exists and still works, in case you hit a `csm`
+bug mid-season and need a fallback — but it isn't the recommended path
+anymore.
 
 ## My Workflow
 
@@ -73,47 +89,42 @@ the necessary ffmpeg command lines to perform the processing.
    camera1 camera2 
    camera3 camera4
    ```
-1. Copy the footage from each camera into the matching directory.
-1. Manually syncronize the video:
-   - Open the first file of cameras 1 and 2 in a playback program which can display frame
-     numbers.  QuickTime player and VLC both work.  
-   - Find a moment in view of both cameras to use for synchronization.  The moment a ball
-     hits the ground, the moment someone lands from jumping, things like that.
-   - Record the frame number from the first camera (`f1` below), and from the second (`f2` below).
-   - Repeat these steps for cameras 2 to 3 (`f3`, `f4`), and 3 to 4 (`f5`, `f6`).
 1. **Optional:** To add metadata, create a file called `GAMEDIR/metadata.yaml`.  Each
    line should be a string to string mapping of a value in the
    [Public Metadata API](https://ffmpeg.org/doxygen/7.0/group__metadata__api.html)
-1. Run [legacy/generate-ffmpeg.py](legacy/generate-ffmpeg.py):
+1. Run the tool, per the [Software](#software) quickstart above:
 
+   ```bash
+   csm probe   GAMEDIR
+   csm sync    GAMEDIR --write
+   csm preview GAMEDIR              # optional but recommended: check sync before the full render
+   csm render  GAMEDIR
    ```
-   legacy/generate-ffmpeg.py -s /Path/to/GAMEDIR f1 f2 f3 f4 f5 f6 > /tmp/runme.sh
-   ```
 
-   **The `-s`/`--scale` flag is currently required for every game.** The cameras record at
-   2720x1530, not 1920x1080, so without `-s` the tiled output is 5440x3060 (double the
-   pixels of 4K) instead of the intended 3840x2160 — roughly doubling both encode time and
-   file size for detail that doesn't survive YouTube's re-encode.
+   The final video ends up at `GAMEDIR/final_video.mp4`. See
+   [docs/REFERENCE.md](docs/REFERENCE.md) for every flag, and its "when automatic sync
+   can't find the sync point" section if `csm sync` reports a disconnected camera or a
+   low-confidence link.
 
-   A command line will be generated into /tmnp/runme.sh.  Inspect the script, and if necessary
-   modify the results for any custom processing you need to do on a specific game.
-1. Run `bash /tmp/runme.sh` to star the processing.  When done the final video will be
-   in `GAMEDIR/final_video.mp4`.
+**WARNING:** These video files are extremely large.  Expect a ~90 minute soccer game to be
+around **~76 GB of raw footage across all four cameras** (measured, not estimated — see
+`docs/DESIGN.md` Sec 2.1). The default 3840×2160 output comes out around 15-30 GB depending
+on the settings you land on after running a quality sweep (`csm preview GAMEDIR --sweep
+crf=...` — see `docs/REFERENCE.md` Sec 4). A full render can take several times realtime
+even on capable desktop hardware.
 
-**WARNING:** These video files are extremely large.  Expect a 90 minute soccer game to be
-around 5G per camera, or 20G of total video.  The resulting output file of them
-tiled together will be 10-14G.  Even on a fast box processing may take 2x-4x realtime.
-
-See [DigitalOceanVideo](DigitalOceanVideo/) for a workflow to store the files in a Digital
-Ocean Space and process them on a Digitial Ocean Droplet.
+See [DigitialOcean](DigitialOcean/) for a workflow to store the files in a Digital
+Ocean Space and process them on a Digital Ocean Droplet.
 
 ## Challenges
 
-These cheap cameras are not time syncronized like professional cameras.  The methods I
-have used to synchronize them above are really only about +-30ms.  Visually it tends to
-be fine, but the audio can be more noticeable.  Additionally, some cameras drop or add
-frames when they roll over to a new file which puts them futher off sync later in the
-video stream.
+These cheap cameras are not time syncronized like professional cameras. `csm sync`'s
+automatic audio-correlation approach gets within about a frame of true sync (validated
+against known-good ground truth — see `docs/DESIGN.md` Sec 2.4-2.5 and
+`csm/SYNCHRONIZATION.md`), well better than the old manual frame-scrubbing method's
+±30ms. Additionally, some cameras drop or add frames when they roll over to a new file
+which puts them futher off sync later in the video stream — sync detection doesn't fix
+this, since it only measures the offset at the start.
 
 Here's tips and tricks and works in progress:
 

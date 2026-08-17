@@ -8,7 +8,7 @@ import warnings
 from fractions import Fraction
 from pathlib import Path
 
-from csm import encoders, ffmpeg, plan, preview as preview_mod, probe, runner, sources, sweep, sync
+from csm import encoders, ffmpeg, plan, preview as preview_mod, probe, render_config, runner, sources, sweep, sync
 from csm import timeline as timeline_mod
 
 
@@ -25,6 +25,14 @@ def _parse_kv_frames(items: list[str] | None, fps: float) -> dict[int, float]:
     for item in items or []:
         cam, _, val = item.partition("=")
         result[int(cam)] = float(val) / fps
+    return result
+
+
+def _parse_kv_ints(items: list[str] | None) -> dict[int, int]:
+    result = {}
+    for item in items or []:
+        cam, _, val = item.partition("=")
+        result[int(cam)] = int(val)
     return result
 
 
@@ -118,6 +126,24 @@ def cmd_probe(args: argparse.Namespace) -> int:
             peak = next((l for l in result.stderr.splitlines() if "max_volume" in l), "")
             print(f"camera{cam} audio: {mean.strip()} {peak.strip()}")
 
+    if args.frame:
+        frame_dir = args.gamedir / ".csm" / "frames"
+        frame_dir.mkdir(parents=True, exist_ok=True)
+        for cam, info in infos.items():
+            if info.first is None:
+                continue
+            # Default well past typical setup time (cameras are often still
+            # being raised/aimed in the first 10-15s) but still clamped to
+            # something the first segment actually contains.
+            at = min(args.frame_at, max(info.first.duration - 1.0, 0.0))
+            out_path = frame_dir / f"camera{cam}.png"
+            argv = [
+                tool.ffmpeg, "-y", "-v", "error", "-ss", f"{at:.6f}",
+                "-i", str(info.first.path), "-frames:v", "1", str(out_path),
+            ]
+            subprocess.run(argv, check=True)
+            print(f"camera{cam}: wrote {out_path} ({info.first.width}x{info.first.height})")
+
     if issues:
         print()
         for issue in issues:
@@ -171,7 +197,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def _build_timeline(
-    args: argparse.Namespace, tool, infos: dict[int, probe.CameraInfo]
+    args: argparse.Namespace, tool, infos: dict[int, probe.CameraInfo],
+    config: render_config.RenderConfig,
 ) -> timeline_mod.Timeline | None:
     """Shared by cmd_render and cmd_preview: sync.yaml + overrides ->
     Timeline. Prints an `error:` line and returns None on failure."""
@@ -198,12 +225,15 @@ def _build_timeline(
 
     audio_cams = _parse_audio_cams(args.audio_cams)
     fps = Fraction(args.fps).limit_denominator(100000)
+    field_cutoffs = dict(config.field_cutoff)
+    field_cutoffs.update(_parse_kv_ints(getattr(args, "field_cutoff", None)))
 
     try:
         return timeline_mod.build_timeline(
             infos, offsets, out_w=out_w, out_h=out_h, fps=fps, audio_cams=audio_cams,
             align_start=args.align_start, align_end=args.align_end,
             start=args.start, end=args.end, duration=args.duration,
+            field_cutoffs=field_cutoffs,
         )
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -219,17 +249,31 @@ def _load_metadata(gamedir: Path) -> dict[str, str]:
     return metadata
 
 
+def _resolve_profile(
+    args: argparse.Namespace, config: render_config.RenderConfig,
+) -> encoders.EncoderProfile:
+    """--crf/--preset (or their GAMEDIR/csm.yaml persisted defaults) only
+    apply to final-h265 -- an explicitly-chosen other --profile is used
+    as-is, since CRF/preset don't mean the same thing across profiles."""
+    if args.profile != "final-h265":
+        return encoders.get_profile(args.profile)
+    crf = args.crf or config.crf or encoders.DEFAULT_CRF
+    preset = args.preset or config.preset or encoders.DEFAULT_PRESET
+    return encoders.final_h265_profile(crf=crf, preset=preset)
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     tool = ffmpeg.locate(args.ffmpeg_path, args.ffprobe_path)
     cameras = sources.discover_cameras(args.gamedir)
     infos = {cam: probe.probe_camera(tool, camera)
              for cam, camera in cameras.items() if camera.present}
 
-    tl = _build_timeline(args, tool, infos)
+    config = render_config.load_render_config(args.gamedir)
+    tl = _build_timeline(args, tool, infos, config)
     if tl is None:
         return 1
 
-    profile = encoders.get_profile(args.profile)
+    profile = _resolve_profile(args, config)
     output_path = args.output or (args.gamedir / "final_video.mp4")
     metadata = _load_metadata(args.gamedir)
     jobs = plan.build_plan(tl, profile, output_path, metadata=metadata)
@@ -252,7 +296,8 @@ def cmd_preview(args: argparse.Namespace) -> int:
     infos = {cam: probe.probe_camera(tool, camera)
              for cam, camera in cameras.items() if camera.present}
 
-    tl = _build_timeline(args, tool, infos)
+    config = render_config.load_render_config(args.gamedir)
+    tl = _build_timeline(args, tool, infos, config)
     if tl is None:
         return 1
 
@@ -262,11 +307,15 @@ def cmd_preview(args: argparse.Namespace) -> int:
     preview_at = args.preview_at or ["middle"]
 
     if args.sweep:
+        default_crf = args.crf or config.crf or encoders.DEFAULT_CRF
+        default_preset = args.preset or config.preset or encoders.DEFAULT_PRESET
         results = sweep.run_sweep(
             tool, capabilities, tl, args.sweep,
             at=preview_at, seconds=args.preview_seconds, output_dir=output_dir,
+            upload_mbps=args.upload_mbps,
+            default_crf=default_crf, default_preset=default_preset,
         )
-        print(sweep.format_results(results))
+        print(sweep.format_results(results, upload_mbps=args.upload_mbps))
         return 0
 
     try:
@@ -299,6 +348,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_common_args(p_probe)
     p_probe.add_argument("--json", action="store_true")
     p_probe.add_argument("--audio", action="store_true", help="Print per-camera audio levels")
+    p_probe.add_argument(
+        "--frame", action="store_true",
+        help="Write one still frame per camera to GAMEDIR/.csm/frames/cameraN.png, "
+             "for reading off pixel coordinates (e.g. for --field-cutoff)",
+    )
+    p_probe.add_argument(
+        "--frame-at", type=float, default=45.0,
+        help="Seconds into the first segment to grab --frame from (default 45 -- past "
+             "typical camera setup/positioning time, before assuming a fixed shot)",
+    )
     p_probe.add_argument("--audio-cams", default="2,4")
     p_probe.set_defaults(func=cmd_probe)
 
@@ -334,7 +393,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--fps", type=float, default=30.0)
     p_render.add_argument("--audio-cams", default="2,4")
     p_render.add_argument("--out-size", default="3840x2160", help="WxH, or 'native'")
+    p_render.add_argument(
+        "--field-cutoff", action="append", metavar="N=PIXELS",
+        help="Repeatable. Pixels from the bottom of camera N's native frame that are "
+             "high-priority field; everything above is pre-blurred so the encoder spends "
+             "fewer bits on sky/stands. Measure from a still frame (e.g. `csm probe --frame`)",
+    )
     p_render.add_argument("--profile", default="final-h265", choices=sorted(encoders.PROFILES))
+    p_render.add_argument(
+        "--crf", default=None,
+        help=f"Overrides GAMEDIR/csm.yaml's persisted value, or the default "
+             f"({encoders.DEFAULT_CRF}). Only meaningful with --profile final-h265",
+    )
+    p_render.add_argument(
+        "--preset", default=None,
+        help=f"Overrides GAMEDIR/csm.yaml's persisted value, or the default "
+             f"({encoders.DEFAULT_PRESET}). Only meaningful with --profile final-h265",
+    )
     p_render.add_argument("--output", type=Path, default=None)
     p_render.add_argument("--work-dir", type=Path, default=None)
     p_render.add_argument("--dry-run", action="store_true")
@@ -354,6 +429,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_preview.add_argument("--fps", type=float, default=30.0)
     p_preview.add_argument("--audio-cams", default="2,4")
     p_preview.add_argument("--out-size", default="3840x2160", help="WxH, or 'native'")
+    p_preview.add_argument(
+        "--field-cutoff", action="append", metavar="N=PIXELS",
+        help="Repeatable. Pixels from the bottom of camera N's native frame that are "
+             "high-priority field; everything above is pre-blurred so the encoder spends "
+             "fewer bits on sky/stands. Measure from a still frame (e.g. `csm probe --frame`)",
+    )
     p_preview.add_argument("--preview-seconds", type=float, default=60.0)
     p_preview.add_argument(
         "--preview-at", action="append", metavar="middle|MM:SS|PCT",
@@ -363,7 +444,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_preview.add_argument("--preview-encoder", default="auto", metavar="auto|NAME")
     p_preview.add_argument(
         "--sweep", action="append", metavar="KEY=v1,v2,...",
-        help="Repeatable; e.g. --sweep crf=21,23,25 --sweep preset=fast,medium",
+        help="Repeatable. Recognized keys: crf, preset, encoder (libx265/libsvtav1), "
+             "psy-rd, aq-strength (libx265 only). e.g. --sweep crf=21,23,25 "
+             "--sweep preset=fast,medium",
+    )
+    p_preview.add_argument(
+        "--crf", default=None,
+        help=f"With --sweep: baseline CRF for dimensions not swept over. Overrides "
+             f"GAMEDIR/csm.yaml's persisted value, or the default ({encoders.DEFAULT_CRF})",
+    )
+    p_preview.add_argument(
+        "--preset", default=None,
+        help=f"With --sweep: baseline preset for dimensions not swept over. Overrides "
+             f"GAMEDIR/csm.yaml's persisted value, or the default ({encoders.DEFAULT_PRESET})",
+    )
+    p_preview.add_argument(
+        "--upload-mbps", type=float, default=sweep.DEFAULT_UPLOAD_MBPS,
+        help="Your actual upload speed, for --sweep's extrapolated upload-time column "
+             f"(default {sweep.DEFAULT_UPLOAD_MBPS:g})",
     )
     p_preview.add_argument("--output", type=Path, default=None, help="Output directory")
     p_preview.add_argument("--work-dir", type=Path, default=None)

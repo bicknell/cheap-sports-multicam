@@ -136,14 +136,19 @@ def cmd_probe(args: argparse.Namespace) -> int:
             if not info.has_audio or info.first is None:
                 continue
             argv = [
-                tool.ffmpeg, "-v", "error", "-t", "20",
+                # volumedetect's stats print at ffmpeg's "info" log level, not
+                # "error" -- -v error silently ate them here (mean/peak always
+                # printed blank, on every camera, every game).
+                tool.ffmpeg, "-v", "info", "-t", "20",
                 "-i", str(info.first.path), "-map", "0:a:0",
                 "-af", "volumedetect", "-f", "null", "-",
             ]
             result = subprocess.run(argv, capture_output=True, text=True)
             mean = next((l for l in result.stderr.splitlines() if "mean_volume" in l), "")
             peak = next((l for l in result.stderr.splitlines() if "max_volume" in l), "")
-            print(f"camera{cam} audio: {mean.strip()} {peak.strip()}")
+            mean = mean.rsplit("]", 1)[-1].strip()
+            peak = peak.rsplit("]", 1)[-1].strip()
+            print(f"camera{cam} audio: {mean} {peak}")
 
     if args.frame:
         frame_dir = args.gamedir / ".csm" / "frames"

@@ -525,12 +525,22 @@ Flow:
 
 1. **Hint from `creation_time`**, when present and self-consistent. Narrows the audio
    search to ±`--prior-window` (default 5 s), including the 180–700 s cross-tripod gaps
-   that would otherwise need a blind search over minutes of audio.
+   that would otherwise need a blind search over minutes of audio. Some older camera
+   firmware (the Brave 7 LE) writes no `creation_time` tag at all, but does name every
+   segment `YYYYMMDDHHMMSS_NNNNNN.ext` -- that filename timestamp (the camera's own local
+   clock, confirmed against the on-screen overlay to within 2 s on real footage) is parsed
+   as a fallback hint when the real tag is absent (`probe._parse_creation_time_from_filename`).
+   Labeling a local-clock reading as UTC is harmless here since the hint is only ever used
+   as a same-game *relative* offset between cameras, never an absolute time.
 2. **Audio determines the offset** by GCC-PHAT within that window.
 3. **Automatic blind fallback** — not an opt-in flag — whenever the hint is missing or
    correlation inside the hinted window falls below `--min-confidence`. Decimated coarse
    search over `--max-offset` (**default 1800 s**, sized from the observed 701 s worst
-   case), then the same refinement. `--no-time-prior` forces this path for testing.
+   case), then the same refinement. `--no-time-prior` forces this path for testing. Tries 3
+   probe points spread across the recording rather than just one, keeping the
+   highest-confidence result -- a single point can land on a low-signal moment (wind gust,
+   dead-ball silence) and report a spuriously out-of-range lag with no second chance
+   otherwise (real games with no `creation_time` at all needed this in practice).
 
 **The forgotten-camera case is a first-class path.** A camera whose clock was never synced
 has a `creation_time` wrong by minutes or hours, so its hinted window contains nothing

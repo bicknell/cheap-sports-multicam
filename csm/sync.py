@@ -286,7 +286,8 @@ def _windowed_measurement(tool: Tool, tlA: Timeline, tlB: Timeline, *,
 
 def _blind_measurement(tool: Tool, tlA: Timeline, tlB: Timeline, *,
                         window_len: float, max_offset: float,
-                        skip_head: float = 60.0) -> tuple[float, float, float] | None:
+                        skip_head: float = 60.0,
+                        n_tries: int = 3) -> tuple[float, float, float] | None:
     """Decimated coarse search over +/- max_offset with no creation_time hint
     (Sec 6.1's 'automatic blind fallback'). A short window from A is
     correlated against as much of B as is available, in one FFT sized to
@@ -297,50 +298,64 @@ def _blind_measurement(tool: Tool, tlA: Timeline, tlB: Timeline, *,
     up to max_offset *after* A. A probe taken near A's own start (as if B
     always started first) silently finds nothing whenever B is actually the
     later camera, which is exactly the case blind search exists to handle.
-    So the probe sits at skip_head + max_offset into A, and B's comparison
-    window is sized generously enough to still cover B starting up to
-    max_offset *before* A too.
+    So the earliest probe sits at skip_head + max_offset into A, and B's
+    comparison window is sized generously enough to still cover B starting
+    up to max_offset *before* A too.
+
+    A single probe point can land on a low-signal moment (wind gust,
+    dead-ball silence) and come back with a spuriously out-of-range lag with
+    no second chance. n_tries spreads probe points across the rest of A's
+    recording instead of just the earliest one, and keeps the
+    highest-confidence result among the tries that land a plausible lag.
     """
-    a_start = skip_head + max_offset
-    if tlA.total_duration <= a_start + window_len:
+    a_start_min = skip_head + max_offset
+    a_start_max = tlA.total_duration - window_len
+    if a_start_max <= a_start_min:
         return None
-    posA = local_to_segment(tlA, a_start)
-    if posA is None:
-        return None
-    segA, offA = posA
-    try:
-        wa = extract_audio_window(tool, segA, offA, window_len)
-    except subprocess.CalledProcessError:
-        return None
+    a_starts = [a_start_min] if n_tries <= 1 else list(np.linspace(a_start_min, a_start_max, n_tries))
 
-    # b_start avoids literal local time 0.0: extracting from the exact start
-    # of an AAC-encoded file can include the codec's own priming/encoder
-    # delay (a fixed ~1024-sample offset), which is invisible everywhere
-    # else because the hint-guided path never happens to anchor exactly on
-    # a segment boundary.
-    b_start = 0.5
-    b_len = min(a_start + max_offset + window_len, tlB.total_duration - b_start)
-    posB = local_to_segment(tlB, b_start)
-    if posB is None or b_len < window_len:
-        return None
-    segB, offB = posB
-    try:
-        wb = extract_audio_window(tool, segB, offB, b_len)
-    except subprocess.CalledProcessError:
-        return None
-    if len(wa) < 100 or len(wb) < 100:
-        return None
+    best: tuple[float, float, float] | None = None  # (lag, sigma, psr)
+    for a_start in a_starts:
+        posA = local_to_segment(tlA, a_start)
+        if posA is None:
+            continue
+        segA, offA = posA
+        try:
+            wa = extract_audio_window(tool, segA, offA, window_len)
+        except subprocess.CalledProcessError:
+            continue
 
-    # wb[y] == wa[y + lag_s] (gcc_phat's calibrated convention). wa's content
-    # at index k is signal(offset(A) + a_start + k/fs); wb's content at index
-    # m is signal(offset(B) + b_start + m/fs). Equating arguments:
-    # offset(B) - offset(A) = a_start - b_start + lag_s.
-    est = gcc_phat(wa, wb, fs=8000, max_lag_s=a_start + max_offset)
-    lag = a_start - b_start + est.lag_s
-    if abs(lag) > max_offset:
-        return None
-    sigma = 0.02 if est.psr >= CONFIDENT_PSR else 0.08
-    return lag, sigma, est.psr
+        # b_start avoids literal local time 0.0: extracting from the exact
+        # start of an AAC-encoded file can include the codec's own
+        # priming/encoder delay (a fixed ~1024-sample offset), which is
+        # invisible everywhere else because the hint-guided path never
+        # happens to anchor exactly on a segment boundary.
+        b_start = 0.5
+        b_len = min(a_start + max_offset + window_len, tlB.total_duration - b_start)
+        posB = local_to_segment(tlB, b_start)
+        if posB is None or b_len < window_len:
+            continue
+        segB, offB = posB
+        try:
+            wb = extract_audio_window(tool, segB, offB, b_len)
+        except subprocess.CalledProcessError:
+            continue
+        if len(wa) < 100 or len(wb) < 100:
+            continue
+
+        # wb[y] == wa[y + lag_s] (gcc_phat's calibrated convention). wa's
+        # content at index k is signal(offset(A) + a_start + k/fs); wb's
+        # content at index m is signal(offset(B) + b_start + m/fs). Equating
+        # arguments: offset(B) - offset(A) = a_start - b_start + lag_s.
+        est = gcc_phat(wa, wb, fs=8000, max_lag_s=a_start + max_offset)
+        lag = a_start - b_start + est.lag_s
+        if abs(lag) > max_offset:
+            continue
+        if best is None or est.psr > best[2]:
+            sigma = 0.02 if est.psr >= CONFIDENT_PSR else 0.08
+            best = (lag, sigma, est.psr)
+
+    return best
 
 
 def measure_link(tool: Tool, tlA: Timeline, tlB: Timeline, pair: tuple[int, int], *,

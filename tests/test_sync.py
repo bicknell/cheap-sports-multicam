@@ -176,3 +176,16 @@ def test_sync_overrides():
 
     result3 = sync.apply_overrides(offsets, offset_overrides={3: 2.5}, nudge_overrides={3: 0.033})
     assert result3[3] == pytest.approx(2.533)
+
+
+def test_parse_creation_time_from_filename():
+    """Older camera firmware writes no creation_time tag at all, but names
+    every segment YYYYMMDDHHMMSS_NNNNNN.ext -- used as a fallback prior."""
+    got = probe._parse_creation_time_from_filename("20250914155248_000001.MP4")
+    assert got == datetime(2025, 9, 14, 15, 52, 48, tzinfo=timezone.utc)
+
+    # NORM_ (current camera) filenames don't match -- no false positive.
+    assert probe._parse_creation_time_from_filename("NORM_00001.MP4") is None
+    assert probe._parse_creation_time_from_filename("not_a_timestamp.MP4") is None
+    # Invalid calendar date in the digits (month 13) -- rejected, not garbage.
+    assert probe._parse_creation_time_from_filename("20251314000000_000001.MP4") is None

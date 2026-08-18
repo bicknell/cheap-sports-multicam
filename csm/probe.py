@@ -4,6 +4,7 @@ says probe.py must run because the rest of the pipeline assumes them.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,6 +13,8 @@ from pathlib import Path
 
 from csm import sources
 from csm.ffmpeg import Tool
+
+_FILENAME_TIMESTAMP_RE = re.compile(r"^(\d{14})_\d+")
 
 
 @dataclass
@@ -74,6 +77,23 @@ def _parse_creation_time(raw: str | None) -> datetime | None:
     return None
 
 
+def _parse_creation_time_from_filename(name: str) -> datetime | None:
+    """Some older camera firmware writes no creation_time tag at all, but
+    names every segment `YYYYMMDDHHMMSS_NNNNNN.ext` -- the camera's own
+    (local) clock at record-start. creation_time is only ever used as a
+    same-game relative hint (Sec 2.4: a prior, never the answer), so
+    labeling a local-clock reading as UTC is harmless here: what matters is
+    the offset between cameras, and every camera in an old-firmware game
+    gets the same (mis)labeling, so it cancels out."""
+    m = _FILENAME_TIMESTAMP_RE.match(name)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
 def probe_segment(tool: Tool, path: Path) -> SegmentInfo:
     argv = [
         tool.ffprobe, "-v", "error", "-print_format", "json",
@@ -91,6 +111,8 @@ def probe_segment(tool: Tool, path: Path) -> SegmentInfo:
     fmt = data.get("format", {})
     duration = float(fmt.get("duration", 0.0))
     creation_time = _parse_creation_time(fmt.get("tags", {}).get("creation_time"))
+    if creation_time is None:
+        creation_time = _parse_creation_time_from_filename(path.name)
 
     video = next((s for s in data["streams"] if s.get("codec_type") == "video"), None)
     audio = next((s for s in data["streams"] if s.get("codec_type") == "audio"), None)

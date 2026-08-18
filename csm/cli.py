@@ -192,6 +192,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 nudge_overrides=nudge_overrides, prior_tolerance=args.prior_tolerance,
             )
         except ValueError as e:
+            for w in caught:
+                print(f"warning: {w.message}", file=sys.stderr)
             print(f"error: {e}", file=sys.stderr)
             return 1
         for w in caught:

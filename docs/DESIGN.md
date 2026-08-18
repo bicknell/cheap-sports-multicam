@@ -675,8 +675,10 @@ useless:**
   consistency.
 
 **Software support in v1 is manual only:** `--clap-at MM:SS` points the correlator at the
-clap directly, using it as the cross-tripod measurement for that link. Record which method
-produced each measurement (`kind: clap` vs `kind: cross-tripod`) so a bad clap is
+clap directly, using it as the cross-tripod measurement for that link. The timestamp is on
+**camera 1's own raw clock only** -- `reference_cam` is hardcoded to `1` and not exposed on
+the CLI, so there's no way to give the clap time from any other camera's footage. Record
+which method produced each measurement (`kind: clap` vs `kind: cross-tripod`) so a bad clap is
 diagnosable rather than mysterious. **Automatic** detection of the sharpest broadband onset
 common to all four cameras is deferred to §13.4 — it's real onset-detection engineering, and
 manual `--clap-at` already captures the accuracy win at near-zero implementation cost.
@@ -1108,7 +1110,7 @@ Sync      --sync-file PATH  --no-time-prior
           --offset N=SEC  --offset-frames N=F  --nudge N=±SEC
           --sync-windows 24  --sync-window-len 20
           --max-offset 1800  --min-confidence 6.0
-          --clap-at MM:SS
+          --clap-at MM:SS (camera 1's clock only)
 Timeline  --align-start {latest,earliest}  --align-end {longest,shortest}
           --start T --end T  (T = SEC|MM:SS|CAM@SEC|CAM@MM:SS)  --duration D
           --fps 30  --audio-cams 2,4

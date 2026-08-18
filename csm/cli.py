@@ -396,7 +396,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--sync-window-len", type=float, default=20.0)
     p_sync.add_argument("--max-offset", type=float, default=1800.0)
     p_sync.add_argument("--min-confidence", type=float, default=6.0)
-    p_sync.add_argument("--clap-at", default=None, metavar="MM:SS")
+    p_sync.add_argument(
+        "--clap-at", default=None, metavar="MM:SS",
+        help="Timestamp of a deliberate clap/clapperboard at midfield, on camera 1's own "
+             "raw clock only (not any other camera, and not the aligned render timeline)",
+    )
     p_sync.add_argument("--fps", type=float, default=30.0, help="For --offset-frames only")
     p_sync.set_defaults(func=cmd_sync)
 

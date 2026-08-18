@@ -40,12 +40,31 @@ def _parse_audio_cams(spec: str) -> tuple[int, ...]:
     return tuple(int(x) for x in spec.split(","))
 
 
-def _parse_clap_at(spec: str) -> float:
+def _parse_mmss(spec: str) -> float:
     parts = spec.split(":")
     if len(parts) == 2:
         mm, ss = parts
         return int(mm) * 60 + float(ss)
     return float(spec)
+
+
+def _parse_clap_at(spec: str) -> float:
+    return _parse_mmss(spec)
+
+
+def _parse_start_end(spec: str, offsets: dict[int, float]) -> float:
+    """Plain SECONDS or MM:SS on the common timeline, or CAM@SECONDS /
+    CAM@MM:SS -- a point in camera CAM's own raw footage, resolved via
+    sync.yaml's offset(CAM) to the equivalent common-timeline second. Lets
+    you scrub whichever camera is convenient rather than mentally
+    translating through the timeline's own origin (Sec 12)."""
+    if "@" in spec:
+        cam_str, _, rest = spec.partition("@")
+        cam = int(cam_str)
+        if cam not in offsets:
+            raise ValueError(f"camera {cam} not in sync offsets (have: {sorted(offsets)})")
+        return offsets[cam] + _parse_mmss(rest)
+    return _parse_mmss(spec)
 
 
 def _parse_out_size(spec: str, infos: dict[int, probe.CameraInfo]) -> tuple[int, int]:
@@ -229,10 +248,12 @@ def _build_timeline(
     field_cutoffs.update(_parse_kv_ints(getattr(args, "field_cutoff", None)))
 
     try:
+        start = _parse_start_end(args.start, offsets) if args.start is not None else None
+        end = _parse_start_end(args.end, offsets) if args.end is not None else None
         return timeline_mod.build_timeline(
             infos, offsets, out_w=out_w, out_h=out_h, fps=fps, audio_cams=audio_cams,
             align_start=args.align_start, align_end=args.align_end,
-            start=args.start, end=args.end, duration=args.duration,
+            start=start, end=end, duration=args.duration,
             field_cutoffs=field_cutoffs,
         )
     except ValueError as e:
@@ -387,8 +408,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--nudge", action="append", metavar="N=+-SEC")
     p_render.add_argument("--align-start", choices=("latest", "earliest"), default="latest")
     p_render.add_argument("--align-end", choices=("longest", "shortest"), default="longest")
-    p_render.add_argument("--start", type=float, default=None)
-    p_render.add_argument("--end", type=float, default=None)
+    p_render.add_argument(
+        "--start", default=None, metavar="SEC|MM:SS|CAM@SEC|CAM@MM:SS",
+        help="Point on the common timeline, or a point in camera CAM's own raw "
+             "footage (e.g. 2@5:24 -- 5:24 into camera 2), resolved via sync.yaml",
+    )
+    p_render.add_argument(
+        "--end", default=None, metavar="SEC|MM:SS|CAM@SEC|CAM@MM:SS",
+        help="Same syntax as --start",
+    )
     p_render.add_argument("--duration", type=float, default=None)
     p_render.add_argument("--fps", type=float, default=30.0)
     p_render.add_argument("--audio-cams", default="2,4")
@@ -423,8 +451,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_preview.add_argument("--nudge", action="append", metavar="N=+-SEC")
     p_preview.add_argument("--align-start", choices=("latest", "earliest"), default="latest")
     p_preview.add_argument("--align-end", choices=("longest", "shortest"), default="longest")
-    p_preview.add_argument("--start", type=float, default=None)
-    p_preview.add_argument("--end", type=float, default=None)
+    p_preview.add_argument(
+        "--start", default=None, metavar="SEC|MM:SS|CAM@SEC|CAM@MM:SS",
+        help="Point on the common timeline, or a point in camera CAM's own raw "
+             "footage (e.g. 2@5:24 -- 5:24 into camera 2), resolved via sync.yaml",
+    )
+    p_preview.add_argument(
+        "--end", default=None, metavar="SEC|MM:SS|CAM@SEC|CAM@MM:SS",
+        help="Same syntax as --start",
+    )
     p_preview.add_argument("--duration", type=float, default=None)
     p_preview.add_argument("--fps", type=float, default=30.0)
     p_preview.add_argument("--audio-cams", default="2,4")

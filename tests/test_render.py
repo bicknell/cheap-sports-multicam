@@ -298,6 +298,25 @@ def test_resolve_profile_layering():
     assert other.name == "preview-x265"
 
 
+def test_parse_start_end_camera_relative():
+    """CAM@SPEC resolves via sync.yaml's offset(CAM), so any camera can be
+    used as the reference point, not just the one the timeline happens to
+    start from. Bare SPEC (no '@') is unchanged: a plain common-timeline
+    point, in seconds or MM:SS."""
+    offsets = {1: 0.0, 2: 2.442, 3: 146.89, 4: 148.414}
+
+    assert cli._parse_start_end("324", offsets) == 324.0
+    assert cli._parse_start_end("5:24", offsets) == 324.0
+
+    assert cli._parse_start_end("1@324", offsets) == 324.0
+    assert cli._parse_start_end("1@5:24", offsets) == 324.0
+    assert cli._parse_start_end("2@50", offsets) == 2.442 + 50.0
+    assert cli._parse_start_end("4@0", offsets) == 148.414
+
+    with pytest.raises(ValueError):
+        cli._parse_start_end("9@0", offsets)
+
+
 # ---------------------------------------------------------- test 26 -------
 
 def test_probe_rejects_mismatched_fps(tool, tmp_path):

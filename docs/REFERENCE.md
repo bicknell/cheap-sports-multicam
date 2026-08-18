@@ -178,9 +178,9 @@ csm render GAMEDIR --out-size native --duration 120
 | `--offset`, `--offset-frames`, `--nudge` | — | Same as `csm sync`, layered **on top of** `sync.yaml` without needing to re-run sync |
 | `--align-start` | `latest` | `latest`: timeline starts once **every** present camera is recording (no camera contributes a black quadrant at the very start unless it's genuinely missing). `earliest`: starts as soon as the *first* camera does, so late-starting cameras begin black |
 | `--align-end` | `longest` | `longest`: timeline runs until the last camera stops (a camera that dies early goes black rather than truncating the game). `shortest`: ends when the first camera stops |
-| `--start T` | none | Explicit start time (seconds on the aligned timeline), overrides `--align-start` |
-| `--end T` | none | Explicit end time, overrides `--align-end` |
-| `--duration D` | none | Explicit duration from `--start` (or the computed start), overrides `--align-end` |
+| `--start T` | none | Explicit start time, overrides `--align-start`. `T` is `SECONDS`, `MM:SS` on the aligned timeline, or `CAM@SECONDS`/`CAM@MM:SS` -- a point in camera CAM's own raw footage, resolved via `sync.yaml`'s offset for that camera. E.g. `--start 2@5:24` means 5:24 into camera 2's own recording, whatever that works out to on the common timeline |
+| `--end T` | none | Explicit end time, overrides `--align-end`. Same syntax as `--start` |
+| `--duration D` | none | Explicit duration in seconds from `--start` (or the computed start), overrides `--align-end` |
 | `--fps` | `30.0` | Output frame rate |
 | `--audio-cams` | `2,4` | Exactly two camera numbers to mix down to stereo (left/right). Run `csm probe --audio` first if you're not sure which mics are usable |
 | `--out-size` | `3840x2160` | `WxH`, or `native` (2× whatever the present cameras actually recorded — use this if your cameras aren't 1080p) |

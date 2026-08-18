@@ -1110,7 +1110,8 @@ Sync      --sync-file PATH  --no-time-prior
           --max-offset 1800  --min-confidence 6.0
           --clap-at MM:SS
 Timeline  --align-start {latest,earliest}  --align-end {longest,shortest}
-          --start T --end T --duration D  --fps 30  --audio-cams 2,4
+          --start T --end T  (T = SEC|MM:SS|CAM@SEC|CAM@MM:SS)  --duration D
+          --fps 30  --audio-cams 2,4
           --out-size 3840x2160|native|WxH
           --field-cutoff N=PIXELS (repeatable, §7.7)
 Encode    --profile {final-h265,preview-videotoolbox,preview-x265}

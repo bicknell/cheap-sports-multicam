@@ -26,10 +26,27 @@ then
 fi
 echo "Using ${spec_file}."
 
+# DROPLET_SIZE/DROPLET_REGION, if set, override the spec file's own
+# size/region for this one request without touching the file on disk --
+# lets droplet-run.sh inject a dynamically-chosen size/region (see
+# droplet-find-size.sh) while manual standalone runs keep using whatever's
+# actually in the spec file, unchanged.
+spec_json=$(cat "$spec_file")
+if [[ -n $DROPLET_SIZE ]];
+then
+    echo "Overriding size -> ${DROPLET_SIZE}"
+    spec_json=$(echo "$spec_json" | jq --arg size "$DROPLET_SIZE" '.size = $size')
+fi
+if [[ -n $DROPLET_REGION ]];
+then
+    echo "Overriding region -> ${DROPLET_REGION}"
+    spec_json=$(echo "$spec_json" | jq --arg region "$DROPLET_REGION" '.region = $region')
+fi
+
 echo "Creating droplet."
 curl -s -X POST -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${DIGITAL_OCEAN_TOKEN}" \
-    -d @"${spec_file}" \
+    -d "$spec_json" \
     https://api.digitalocean.com/v2/droplets > droplet-info.json
 
 new_droplet_id=$(jq -r '.droplet.id' droplet-info.json)

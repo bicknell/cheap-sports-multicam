@@ -170,9 +170,30 @@ Everything above in one command, no user input required once it starts:
 
 Needs `DIGITAL_OCEAN_TOKEN`, `CSM_BUCKET`, and a key already loaded in `ssh-agent` (it checks
 `ssh-add -l` up front and tells you to run `ssh-add` if not, rather than spending money before
-finding out). Runs `droplet-create.sh` → `droplet-upload.sh` → steps 2-5 unattended (via
-`droplet-all-steps.sh`, over a direct non-interactive `ssh` call -- `droplet-login.sh` itself
-is untouched, still useful for manual debugging) → `droplet-destroy.sh`.
+finding out). Runs `droplet-find-size.sh` (picks the size/region, see below) →
+`droplet-create.sh` → `droplet-upload.sh` → steps 2-5 unattended (via `droplet-all-steps.sh`,
+over a direct non-interactive `ssh` call -- `droplet-login.sh` itself is untouched, still
+useful for manual debugging) → `droplet-destroy.sh`.
+
+**Size/region are chosen automatically, not read from `droplet-spec.local.json`.** Before
+creating anything, `droplet-run.sh` runs `droplet-find-size.sh` against the priority list in
+`droplet-size-priority.txt` (one slug per line, best first, `#` comments allowed -- edit
+freely, no code changes needed) and picks the first slug available anywhere in
+nyc1/nyc2/nyc3, preferring nyc3 as a tiebreaker (doesn't affect cost -- see below -- just a
+mild default). The winning slug/region override `droplet-spec.local.json`'s own `size`/
+`region` for that one request via `DROPLET_SIZE`/`DROPLET_REGION` env vars, without touching
+the file on disk; a manual `./droplet-create.sh` run (outside `droplet-run.sh`) still uses
+whatever's actually in the spec file, unchanged. If nothing on the list is available
+anywhere, it fails before creating a droplet, not after.
+
+Run `droplet-find-size.sh` standalone any time to just see the table without creating
+anything: `./droplet-find-size.sh SLUG1 SLUG2 ...` -- prints availability (nyc1/nyc2/nyc3)
+and price (`$/hr`, `$/core/hr`) for each slug, then its recommendation.
+
+NYC1/NYC2/NYC3 are one DigitalOcean "region group" -- Spaces transfer between any of them is
+free over the internal network (given the default VPC-local DNS resolver, which nothing here
+changes), not just same-datacenter. So the nyc3 preference above is just a tiebreaker, not a
+cost optimization; region choice among the three doesn't otherwise matter for this workload.
 
 **Default is to always destroy when the run finishes, success or failure** -- a droplet
 nobody destroys is the expensive failure (~$950/month at $1.30/hr if forgotten). Pass

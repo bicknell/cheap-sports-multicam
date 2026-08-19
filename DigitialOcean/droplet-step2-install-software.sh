@@ -6,7 +6,6 @@ _start=$(date +%s)
 trap 'echo "[$(basename "$0")] elapsed: $(( $(date +%s) - _start ))s"' EXIT
 
 cd ~
-mkdir -p ~/bin
 
 # Clone cheap-sports-multicam so we have the csm package. main doesn't have
 # it yet (DESIGN.md Sec 15: droplet work lands on csm-rewrite pre-merge).
@@ -31,21 +30,21 @@ then
     echo "Stock ffmpeg is missing:${missing_codec} -- falling back to a BtbN static build."
     curl -sL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" -o /tmp/ffmpeg-static.tar.xz
     tar -xJf /tmp/ffmpeg-static.tar.xz -C /tmp
-    cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffprobe ~/bin/
-    echo "Using static build: $(~/bin/ffmpeg -version | head -1)"
+    cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/
+    echo "Using static build: $(/usr/local/bin/ffmpeg -version | head -1)"
 else
     echo "Stock ffmpeg has libx265 and libsvtav1: $(ffmpeg -version | head -1)"
 fi
 
-# Install csm itself into its own venv, then expose the `csm` entry point on
-# PATH without requiring the venv to be activated interactively.
+# Install csm itself into its own venv, then symlink the entry point into
+# /usr/local/bin -- already on PATH for every shell (login or not) with no
+# ~/.bashrc-sourcing dependency, unlike ~/bin (a script's own `export PATH`
+# or ~/.bashrc append only takes effect in shells started *after* it runs,
+# not the already-open interactive session step3/step4 run in next).
 cd ~/cheap-sports-multicam
 python3 -m venv ~/.csm-venv
 ~/.csm-venv/bin/pip install -e .
-ln -sf ~/.csm-venv/bin/csm ~/bin/csm
-
-echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
-export PATH="$HOME/bin:$PATH"
+ln -sf ~/.csm-venv/bin/csm /usr/local/bin/csm
 
 if csm --help > /dev/null 2>&1;
 then

@@ -3,7 +3,9 @@
 # Full automation: find size -> create -> upload -> run steps 2-5 unattended
 # -> destroy. Size/region come from droplet-find-size.sh against
 # droplet-size-priority.txt, not from droplet-spec.local.json.
-# Usage: ./droplet-run.sh [--keep-on-failure] GAMEDIR [csm sync/render flags...]
+# Usage: ./droplet-run.sh [--keep-on-failure] GAMEDIR [sync/render flags...] [-- render-only flags...]
+# render-only flags (e.g. --start, --duration, --out-size, --profile) must go
+# after a literal "--" -- see droplet-step4-process.video.sh.
 #
 # Default is to always destroy the droplet when this script exits, success
 # or failure -- a droplet nobody destroys is the expensive failure
@@ -27,7 +29,7 @@ done
 
 if [[ ${#positional[@]} -lt 1 ]];
 then
-    echo "Usage: $0 [--keep-on-failure] GAMEDIR [csm sync/render flags...]"
+    echo "Usage: $0 [--keep-on-failure] GAMEDIR [sync/render flags...] [-- render-only flags...]"
     exit 1
 fi
 

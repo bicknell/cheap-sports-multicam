@@ -131,11 +131,13 @@ On the droplet, run:
    Space for processing.
    - This can be started in a second window as soon as s3cmd is installed in the previous
      step.  This helps reduce the total time the droplet is in use.
-3. `./droplet-step4-process.video.sh GAMEDIR [csm flags...]` runs `csm probe` / `csm sync
-   --write` / `csm render` in sequence, printing the render's `--dry-run` output to
-   `GAMEDIR/.csm/render.sh` as an audit trail before actually rendering. Any extra flags
-   (e.g. `--field-cutoff`, `--crf`) are forwarded to `csm sync`/`csm render`. See
-   `../docs/REFERENCE.md` for the full flag list.
+3. `./droplet-step4-process.video.sh GAMEDIR [flags...] [-- render-only flags...]` runs
+   `csm probe` / `csm sync --write` / `csm render` in sequence, printing the render's
+   `--dry-run` output to `GAMEDIR/.csm/render.sh` as an audit trail before actually
+   rendering. Flags before `--` are forwarded to both `csm sync` and `csm render` (e.g.
+   `--offset`, `--nudge`); flags after `--` go to `csm render` only -- required for
+   render-only flags like `--start`/`--duration`/`--out-size`/`--profile`, which `csm sync`
+   does not recognize and would reject. See `../docs/REFERENCE.md` for the full flag list.
 4. `./droplet-step5-upload-video.sh GAMEDIR` uploads the final video (`GAMEDIR/final_video.mp4`)
    back to the Space.
 5. **OPTIONAL**  Upload the video to other sources.  The Droplet comes with a bunch of

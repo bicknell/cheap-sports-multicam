@@ -21,7 +21,7 @@ trap 'echo "[$(basename "$0")] elapsed: $(( $(date +%s) - _start ))s"' EXIT
 
 if [ "$#" -lt 1 ]; then
     echo "Error: game directory not specified"
-    echo "Usage: $0 <bucket-directory> [csm sync/render flags...]"
+    echo "Usage: $0 <bucket-directory> [sync/render flags...] [-- render-only flags...]"
     exit 1
 fi
 

@@ -188,6 +188,8 @@ csm render GAMEDIR --out-size native --duration 120
 | `--profile` | `final-h265` | Encoder profile — run `csm render GAMEDIR --profile bogus` to see the current list |
 | `--crf` | `23` | Only meaningful with `--profile final-h265`. Overrides `GAMEDIR/csm.yaml`'s persisted value if it has one — see Sec 5.6 |
 | `--preset` | `fast` | Same as `--crf` — `GAMEDIR/csm.yaml` provides the default, this overrides it for one run |
+| `--psy-rd` | `2.0` | Same as `--crf` — libx265's psycho-visual RD strength; `--sweep` found no real effect in practice, kept overridable anyway |
+| `--aq-strength` | `0.3` | Same as `--crf` — how hard adaptive quantization redirects bits away from locally-complex regions (e.g. shiny turf); a real, favorable, roughly-linear tradeoff in a 5-field `--sweep` |
 | `--output` | `GAMEDIR/final_video.mp4` | Output file path |
 | `--work-dir` | a temp directory | Where concat list files are materialized during the render |
 | `--dry-run` | off | Print the exact `ffmpeg` command (properly quoted, pasteable, provably the same command that would have run) instead of running it |
@@ -217,7 +219,7 @@ csm preview GAMEDIR --sweep crf=21,23,25,26                   # quality/speed sw
 | `--preview-seconds` | `60.0` | Window length |
 | `--preview-at` | `middle` | Repeatable. `middle`, `MM:SS`, or a `PCT%` — each an offset into the *rendered* timeline (0 = the moment the timeline starts, not the start of any individual camera's footage). An additional automatic window is always rendered at the first moment all four cameras are simultaneously live (skipped if it's the same window you already asked for), since that's where a sync error is most visible |
 | `--preview-encoder` | `auto` | `auto` picks `hevc_videotoolbox` (fast, macOS-only) if available, else `libx265 -preset veryfast`. Pass an explicit profile name to force one |
-| `--crf`, `--preset` | `23`, `fast` | **Only with `--sweep`**: the baseline value for any dimension you don't explicitly sweep over (e.g. `--sweep preset=fast,medium` alone still needs a CRF to render at — this is it). `GAMEDIR/csm.yaml` provides the default; these override it. Has no effect on plain (non-`--sweep`) preview, which always uses the fast preview encoder regardless |
+| `--crf`, `--preset`, `--psy-rd`, `--aq-strength` | `23`, `fast`, `2.0`, `0.3` | **Only with `--sweep`**: the baseline value for any dimension you don't explicitly sweep over (e.g. `--sweep preset=fast,medium` alone still needs a CRF to render at — this is it). `GAMEDIR/csm.yaml` provides the default; these override it. Has no effect on plain (non-`--sweep`) preview, which always uses the fast preview encoder regardless |
 | `--upload-mbps` | `40` | **Your actual upload speed**, in Mbps — used only by `--sweep`'s extrapolated upload-time column (Sec 4). Everyone's connection is different and changes over time, so don't trust the default; pass your own |
 | `--output` | `GAMEDIR/.csm/preview/` | **A directory**, not a file — one `preview_<label>.mp4` per window |
 | `--dry-run` | off | Same as `csm render --dry-run` |
@@ -442,6 +444,8 @@ in `GAMEDIR/csm.yaml`:
 field_cutoff: {1: 880, 2: 910, 3: 800, 4: 845}
 crf: 25
 preset: fast
+psy_rd: 2.0
+aq_strength: 0.3
 ```
 
 Both `render` and `preview` read this file automatically if it exists. Same
@@ -453,12 +457,13 @@ in the file.
 
 - `field_cutoff` applies to both `render` and `preview` — it changes the
   actual picture in both.
-- `crf`/`preset` apply to `render`'s `final-h265` profile, and become
-  `--sweep`'s baseline for whichever dimension you *don't* explicitly sweep
-  over (`--sweep preset=fast,medium` alone still needs a CRF to render each
-  variant at — this is where it comes from if you don't pass `--crf`). They
-  have **no effect on plain preview** (no `--sweep`), which always uses the
-  fast, deliberately-unrelated-to-final-quality preview encoder.
+- `crf`/`preset`/`psy_rd`/`aq_strength` apply to `render`'s `final-h265`
+  profile, and become `--sweep`'s baseline for whichever dimension you
+  *don't* explicitly sweep over (`--sweep preset=fast,medium` alone still
+  needs a CRF to render each variant at — this is where it comes from if you
+  don't pass `--crf`). They have **no effect on plain preview** (no
+  `--sweep`), which always uses the fast, deliberately-unrelated-to-final-
+  quality preview encoder.
 - Written by hand today — there's no `csm render --write-defaults` (yet) to
   generate it from a chosen sweep result automatically.
 
@@ -588,7 +593,7 @@ csm/
   runner.py      the only module that touches the filesystem / spawns ffmpeg
   preview.py     preview window resolution + plan building
   sweep.py       --sweep implementation
-  render_config.py  GAMEDIR/csm.yaml -- persisted field_cutoff/crf/preset
+  render_config.py  GAMEDIR/csm.yaml -- persisted field_cutoff/crf/preset/psy_rd/aq_strength
   host.py        host capability detection
 ```
 

@@ -758,8 +758,8 @@ linear the whole way with no sign of a cliff by 0.3 — a real, favorable, monot
 unlike `psy-rd`, which was flat across 0.5–2.0 on the same content (barely 1% size change).
 See §13.6: a follow-up sweep across five fields (grass/turf, shiny/matte, soccer-only/
 dual-lined) confirmed `0.3` generalizes rather than being overfit to the one worst-case
-field it was tuned on, and is kept as the default. Exposing it as a real option instead of
-a fixed value remains open there.
+field it was tuned on, and is kept as the default. `--psy-rd`/`--aq-strength` are now real
+CLI/`csm.yaml` options (§12.1) rather than fixed values, same pattern as `--crf`/`--preset`.
 
 **Treat all of this as provisional**, not final: re-sweep after real experience with
 `--field-cutoff` (§7.7) and again on any new hardware (droplet, Apple Silicon) — see
@@ -1129,7 +1129,7 @@ Timeline  --align-start {latest,earliest}  --align-end {longest,shortest}
           --out-size 3840x2160|native|WxH
           --field-cutoff N=PIXELS (repeatable, §7.7)
 Encode    --profile {final-h265,preview-videotoolbox,preview-x265}
-          --crf N --preset NAME  (final-h265 only; §12.1 on persistence)
+          --crf N --preset NAME --psy-rd N --aq-strength N  (final-h265 only; §12.1 on persistence)
 Run       --output PATH  --work-dir PATH  --dry-run
 Preview   --preview-seconds 60  --preview-at middle|MM:SS|PCT (repeatable)
           --preview-encoder auto|NAME
@@ -1154,13 +1154,15 @@ provides the default, an explicit CLI flag on any given command still wins for t
 field_cutoff: {1: 880, 2: 910, 3: 800, 4: 845}
 crf: 25
 preset: fast
+psy_rd: 2.0
+aq_strength: 0.3
 ```
 
 `field_cutoff` applies to both `render` and `preview` (it changes the actual composite,
-same in both). `crf`/`preset` apply to `render`'s `final-h265` profile and become
-`--sweep`'s baseline for any dimension not explicitly swept over — not to plain `preview`'s
-fast preview-encoder path, which is deliberately fixed/quick and unrelated to final-quality
-tuning. Written by hand today; no `csm ... --write-defaults` yet.
+same in both). `crf`/`preset`/`psy_rd`/`aq_strength` apply to `render`'s `final-h265`
+profile and become `--sweep`'s baseline for any dimension not explicitly swept over — not
+to plain `preview`'s fast preview-encoder path, which is deliberately fixed/quick and
+unrelated to final-quality tuning. Written by hand today; no `csm ... --write-defaults` yet.
 
 `--dry-run` emits a `set -euo pipefail` script generated with `shlex.join(argv)` — so the
 printed script is *provably* the same command, not a re-derivation. This preserves the
@@ -1289,7 +1291,7 @@ first, before the feature, once building it — that's what makes chunking safe 
 jobs to run" from "how to execute them," so adding a chunked planner later is additive, not
 a rewrite.
 
-### 13.6 `aq-strength` below 0.3, and making it a real option
+### 13.6 `aq-strength` below 0.3, and making it a real option — resolved
 
 Phase 4's real `--sweep aq-strength=...` run against the worst-case-turf game (2026-04-19)
 found a genuine, favorable, roughly linear tradeoff, unlike `psy-rd` (flat, no real effect
@@ -1326,16 +1328,19 @@ camera and current 4K:
   who wants to push size further for a small (~0.2-0.6 VMAF point) quality cost, but there's
   no evidence any specific field *needs* a different value than the global default, which
   weakens the case for the per-game override below.
-- **Make it a real CLI/`csm.yaml` option**, the same way `--crf`/`--preset` already are
-  (§12.1) rather than a fixed value in `_final_h265_args`, remains available to build.
-  `psy_rd`/`aq_strength` are already threaded through `sweep_args` for `--sweep`; the
-  remaining work is the same pattern already built for crf/preset — thread them through
-  `final_h265_profile()`, add `--aq-strength`/`--psy-rd` flags, and let `GAMEDIR/csm.yaml`
-  persist them.
-- **Trigger to build the option:** as soon as a specific game's footage seems to want a
-  different value than the global default — e.g. unusually uniform (low-motion, evenly-lit)
-  content where a still-lower value might win more, or content where 0.3 turns out to be
-  already too aggressive. Not yet observed across the five games tested above.
+- **Built: `--psy-rd`/`--aq-strength` are now real options**, same layering pattern as
+  `--crf`/`--preset` (§12.1) — CLI flag wins for one run, `GAMEDIR/csm.yaml` persists a
+  per-game default, both fall back to `encoders.DEFAULT_PSY_RD`/`DEFAULT_AQ_STRENGTH`
+  otherwise. `--sweep`'s baseline for whichever of the two isn't the swept dimension also
+  respects the persisted/CLI value now, not just the global default. Ahead of the trigger
+  below actually firing — motivated instead by the upcoming Apple Silicon work (§8, §7.5):
+  re-sweeping on new hardware with `final-av1` will want per-game overrides available
+  without editing `encoders.py` each time.
+- **Trigger that would have justified building it anyway:** a specific game's footage
+  wanting a different value than the global default — e.g. unusually uniform (low-motion,
+  evenly-lit) content where a still-lower value might win more, or content where 0.3 turns
+  out to be already too aggressive. Not observed across the five games tested above, but no
+  longer the gating condition now that it's built.
 
 ---
 

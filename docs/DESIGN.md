@@ -1438,6 +1438,17 @@ Time savings, in order of value:
   variable, writing it to `/etc/profile.d/csm-bucket.sh` during upload genuinely works — the
   login shell that reads it doesn't exist yet when the file is written.
 
+**First full render completed on the cheap tier, with swap** (manually, not committed — see
+above): a real `final-h265` render of the 130s test clip took **1:53:13 wall** on
+`s-2vcpu-4gb` with a 2GB swapfile, versus ~7 minutes for the identical clip on the Mac — a
+~16× slowdown. `/usr/bin/time -v` showed only 128% average CPU (not even saturating 2 cores)
+against 11.7M major page faults and 271M filesystem-input operations: **the wall time was
+dominated by swap I/O, not CPU starvation.** Peak RSS was 3569860 KB (≈3.49 GB), consistent
+with the earlier OOM measurement (≈3.55 GB) — this time absorbed by swap instead of killed.
+This is why the next test moves to 8 GB RAM (`s-4vcpu-8gb-240gb-intel`, NYC3, matching the
+Space's region): eliminating swap entirely should recover most of that 16× gap on its own,
+separately from whatever the extra cores add.
+
 **Design note for `droplet-run.sh` when it's built:** any step where the script auto-continues
 past something a human would normally confirm (e.g. surviving a reboot and reconnecting on
 its own) should give a brief abort window first — a few seconds of "press any key to cancel"

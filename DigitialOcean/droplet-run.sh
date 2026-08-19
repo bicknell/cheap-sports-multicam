@@ -1,6 +1,8 @@
 #!/bin/bash
 
-# Full automation: create -> upload -> run steps 2-5 unattended -> destroy.
+# Full automation: find size -> create -> upload -> run steps 2-5 unattended
+# -> destroy. Size/region come from droplet-find-size.sh against
+# droplet-size-priority.txt, not from droplet-spec.local.json.
 # Usage: ./droplet-run.sh [--keep-on-failure] GAMEDIR [csm sync/render flags...]
 #
 # Default is to always destroy the droplet when this script exits, success
@@ -53,6 +55,54 @@ then
     exit 1
 fi
 
+mkdir -p logs
+
+# Pick a size/region before creating anything -- droplet-find-size.sh checks
+# real-time availability across nyc1/nyc2/nyc3, so a stale/sold-out slug in
+# droplet-spec.local.json doesn't silently fail create.sh after billing has
+# already started.
+priority_file="droplet-size-priority.txt"
+if [[ ! -f $priority_file ]];
+then
+    echo "Missing ${priority_file} -- see droplet-find-size.sh for the expected format."
+    exit 1
+fi
+
+priority_slugs=()
+while read -r line;
+do
+    line="${line%%#*}"    # strip comments (whole-line or trailing)
+    [[ -n $line ]] && priority_slugs+=("$line")
+done < "$priority_file"
+
+if [[ ${#priority_slugs[@]} -eq 0 ]];
+then
+    echo "${priority_file} has no slugs listed."
+    exit 1
+fi
+
+size_log="logs/droplet-find-size-$(date -u +%Y%m%dT%H%M%SZ).log"
+
+echo "=== find size ==="
+date
+./droplet-find-size.sh "${priority_slugs[@]}" | tee "$size_log"
+find_size_status=${PIPESTATUS[0]}
+
+if [[ $find_size_status -ne 0 ]];
+then
+    echo "No candidate size available in nyc1/nyc2/nyc3 -- see ${size_log}. Not creating a droplet."
+    exit 1
+fi
+
+export DROPLET_SIZE=$(grep '^SLUG=' "$size_log" | cut -d= -f2)
+export DROPLET_REGION=$(grep '^REGION=' "$size_log" | cut -d= -f2)
+
+if [[ -z $DROPLET_SIZE || -z $DROPLET_REGION ]];
+then
+    echo "Could not parse a recommendation out of droplet-find-size.sh's output -- see ${size_log}."
+    exit 1
+fi
+
 echo "=== create ==="
 date
 ./droplet-create.sh
@@ -69,7 +119,6 @@ date
 upload_status=$?
 
 run_status=1
-mkdir -p logs
 log_file="logs/droplet-run-${GAMEDIR}-$(date -u +%Y%m%dT%H%M%SZ).log"
 
 if [[ -z $IPV4ONLY ]];

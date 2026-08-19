@@ -1551,6 +1551,28 @@ is overwhelmingly encoder-bound — decode plus tiling is 2.4 % of pipeline cost
 generation, not just faster disk, which is the more plausible reason it helped at 5.4K; step
 2 will confirm or overturn that at 4K.
 
+**Family choice, confirmed with real data.** DO's droplet families: Basic (shared CPU),
+General Purpose (dedicated, typical core/RAM balance), CPU-Optimized (more cores, less RAM),
+Memory-Optimized (fewer cores, more RAM), Storage-Optimized (IO-focused); each offered as
+Regular Intel + SSD, Premium Intel + NVMe, and sometimes AMD + NVMe. `top` on a real
+`s-4vcpu-8gb-240gb-intel` run showed ffmpeg at ~4.3 GB RSS with 4 cores fully saturated
+(390/400%), consistent with the Mac's own ~5 GB ceiling — and since x265 self-limits to 4
+frame threads at 4K regardless of core count (§3.4), that ceiling shouldn't climb much
+further at 16 or 32 cores either; extra cores beyond 4 mostly add WPP row-parallelism sharing
+existing buffers, not new independently-buffered frames. **CPU-Optimized wins past 8 cores**
+— its RAM-per-core ratio already clears the ~5 GB ceiling at 8 cores (16 GB) and only grows
+from there, so there's no reason to pay Premium/General-Purpose rates for RAM this workload
+doesn't use.
+
+**Regular vs. Premium Intel within CPU-Optimized is deliberately not being settled by
+synthetic benchmarking.** They're close enough that a clean synthetic comparison probably
+wouldn't be decisive, and DO is frequently out of CPU-Optimized capacity in one or more
+datacenters — in practice, availability may pick the CPU for you rather than preference doing
+so. The plan is to track wall time on whichever is actually available across 2–3 real games
+during the season and compare after the fact, rather than spend more droplet-hours chasing a
+difference real usage may make moot. Knowing how availability affects cost/timeline is still
+worth tracking even if it isn't a free choice every time.
+
 ### 14.4 Data movement: the raw upload dominates everything
 
 The current workflow uploads raw footage from home to a Space (which doubles as team

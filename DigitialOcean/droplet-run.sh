@@ -81,7 +81,10 @@ then
     for arg in "$GAMEDIR" "${csm_flags[@]}"; do
         remote_cmd+=" $(printf '%q' "$arg")"
     done
-    ssh "root@${ssh_host}" "$remote_cmd" 2>&1 | tee "$log_file"
+    # See droplet-upload.sh: fresh host key every create, destroyed in
+    # hours -- don't prompt, don't persist it.
+    ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null \
+        "root@${ssh_host}" "$remote_cmd" 2>&1 | tee "$log_file"
     run_status=${PIPESTATUS[0]}
 fi
 

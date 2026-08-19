@@ -19,4 +19,9 @@ then
     exit 1
 fi
 
-ssh "root@${ip}"
+# Every droplet gets a fresh host key on create, and this one is destroyed
+# in hours -- skip the interactive fingerprint prompt and don't persist the
+# key to ~/.ssh/known_hosts, where it would be pure clutter (or worse, a
+# scary "REMOTE HOST IDENTIFICATION HAS CHANGED" warning for a future
+# unrelated droplet that happens to reuse the same IP).
+ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null "root@${ip}"

@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from csm import encoders, runner
+from csm import encoders, host, runner
 from csm.ffmpeg import Capabilities, Tool
 from csm.filtergraph import build_filtergraph
 from csm.plan import FfmpegJob
@@ -73,7 +73,12 @@ def score(tool: Tool, capabilities: Capabilities, variant_path: Path, reference_
     across metrics. Regexes verified against this ffmpeg build's actual
     stderr output, not assumed from docs."""
     if capabilities.has_libvmaf:
-        m = re.search(r"VMAF score:\s*([\d.]+)", _run_metric(tool, "libvmaf", variant_path, reference_path))
+        # libvmaf's own n_threads default (0) measured at ~160% CPU on a
+        # 16-core machine -- effectively single-threaded, and roughly 2x
+        # the cost of the encode it's scoring. Match total_cores explicitly.
+        n_threads = host.detect_host().total_cores
+        lavfi = f"libvmaf=n_threads={n_threads}"
+        m = re.search(r"VMAF score:\s*([\d.]+)", _run_metric(tool, lavfi, variant_path, reference_path))
         if m:
             return float(m.group(1)), "vmaf"
     m = re.search(r"XPSNR\s+y:\s*([\d.]+)", _run_metric(tool, "xpsnr", variant_path, reference_path))

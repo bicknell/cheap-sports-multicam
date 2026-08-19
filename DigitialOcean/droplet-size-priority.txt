@@ -1,0 +1,16 @@
+# Droplet size slugs for droplet-run.sh's automatic sizing, one per line,
+# highest priority (best price/performance) first. Blank lines and lines
+# starting with # are ignored. Fed straight to droplet-find-size.sh, which
+# checks real-time availability in nyc1/nyc2/nyc3 and prints the table.
+#
+# Edit this list freely as pricing/availability/preference changes -- no
+# script changes needed. See DESIGN.md Sec 14.3 for the reasoning behind
+# this ordering (CPU-Optimized beats General Purpose past 8 cores; Regular
+# vs Premium Intel is deliberately being settled by real-game A/B tracking,
+# not synthetic benchmarking).
+c-32-intel
+c-32
+c-16-intel
+c-16
+g-32vcpu-128gb
+g-16vcpu-64gb

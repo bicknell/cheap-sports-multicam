@@ -383,6 +383,31 @@ def test_render_output_shape(tool, synthetic_game, tmp_path):
 
 
 @pytest.mark.slow
+def test_render_relative_gamedir_from_different_cwd(tool, synthetic_game, monkeypatch):
+    """Regression: the concat demuxer resolves a relative list-file entry
+    against the *list file's own* directory, not the process cwd -- so
+    runner.py must always write absolute paths, not str(path) verbatim.
+    Surfaced for real running `csm render droplet-test-game` from ~ on a
+    droplet (work_dir defaults to system temp, nothing to do with ~); every
+    earlier render happened to pass an absolute GAMEDIR, masking it. Uses
+    the real default work_dir (None) rather than tmp_path to match."""
+    game = synthetic_game({1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}, {1: 4.0, 2: 4.0, 3: 4.0, 4: 4.0})
+    monkeypatch.chdir(game.parent)
+    relative_game = Path(game.name)
+
+    infos = _probe_all(tool, relative_game)
+    tl = timeline_mod.build_timeline(
+        infos, {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}, out_w=640, out_h=360, fps=Fraction(30),
+    )
+    profile = encoders.get_profile("final-h265")
+    output = relative_game / "out.mp4"
+    job = plan.build_plan(tl, profile, output)[0]
+    runner.run_job(tool, job)
+
+    assert output.exists() and output.stat().st_size > 0
+
+
+@pytest.mark.slow
 def test_render_color_range(tool, tmp_path):
     game = tmp_path / "game"
     cam_dir = game / "camera1"

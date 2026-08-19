@@ -16,7 +16,13 @@ from csm.plan import FfmpegJob
 
 
 def _concat_list_line(path: Path) -> str:
-    escaped = str(path).replace("'", "'\\''")
+    # Absolute, not str(path) verbatim: the concat demuxer resolves a
+    # relative entry against the *list file's own* directory (a temp dir
+    # that has nothing to do with the process cwd), not the cwd a relative
+    # GAMEDIR was typed relative to. Surfaced for real running `csm render`
+    # on a relative GAMEDIR (a droplet's `csm render droplet-test-game`) --
+    # every prior render happened to pass an absolute GAMEDIR.
+    escaped = str(path.resolve()).replace("'", "'\\''")
     return f"file '{escaped}'\n"
 
 

@@ -756,8 +756,10 @@ resolution buys far more than CRF does.
 game (2026-04-19, §7.7): 1.0→0.3 shrank the file ~13% for a 0.26 VMAF point cost, roughly
 linear the whole way with no sign of a cliff by 0.3 — a real, favorable, monotonic tradeoff,
 unlike `psy-rd`, which was flat across 0.5–2.0 on the same content (barely 1% size change).
-See §13.6 for the TODO on testing further below 0.3 and exposing this as a real option
-instead of a fixed value.
+See §13.6: a follow-up sweep across five fields (grass/turf, shiny/matte, soccer-only/
+dual-lined) confirmed `0.3` generalizes rather than being overfit to the one worst-case
+field it was tuned on, and is kept as the default. Exposing it as a real option instead of
+a fixed value remains open there.
 
 **Treat all of this as provisional**, not final: re-sweep after real experience with
 `--field-cutoff` (§7.7) and again on any new hardware (droplet, Apple Silicon) — see
@@ -1293,21 +1295,47 @@ Phase 4's real `--sweep aq-strength=...` run against the worst-case-turf game (2
 found a genuine, favorable, roughly linear tradeoff, unlike `psy-rd` (flat, no real effect
 in the same test): 1.0→0.3 shrank the file ~13% for a 0.26 VMAF point cost, with no sign of
 a cliff by 0.3. `aq-strength` moved to `0.3` as the new default (§7.2) on that evidence, but
-only four points were measured (1.0/0.8/0.5/0.3), all at CRF 23.
+only four points were measured (1.0/0.8/0.5/0.3), all at CRF 23, all on one field.
 
-- **Test values below 0.3.** The trend held all the way down to the lowest value tried; where
-  it actually stops being a good trade is unmeasured. Worth another `--sweep aq-strength=...`
-  pass before assuming 0.3 is the true optimum rather than just "as far as we happened to
-  test."
+**Follow-up, resolved.** Re-ran `--sweep aq-strength=1.0,0.7,0.5,0.3,0.15` (2-minute window,
+20 minutes into each game, otherwise production settings) across five real games chosen to
+span field type: grass and turf, shiny and matte, soccer-only and dual-lined, old 1080p
+camera and current 4K:
+
+| Game | Field | 1.0 | 0.7 | 0.5 | 0.3 | 0.15 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2025-09-13   | grass, soccer-only, 1080p    | 966MB / 83.52 | 921MB / 83.36 | 894MB / 83.26 | 873MB / 83.17 | 862MB / 83.13 |
+| 2025-09-14   | turf, soccer-only, 1080p     | 807MB / 86.92 | 751MB / 86.73 | 718MB / 86.60 | 689MB / 86.47 | 674MB / 86.39 |
+| 2025-11-15_Game2 | grass, 4K                | 365MB / 88.04 | 332MB / 87.84 | 312MB / 87.71 | 293MB / 87.57 | 282MB / 87.48 |
+| 2026-03-28_Game2 | turf, dual-lined, 4K     | 479MB / 89.12 | 448MB / 89.04 | 430MB / 88.98 | 414MB / 88.92 | 404MB / 88.90 |
+| 2026-04-19   | shiny turf, dual-lined, 4K (worst case) | 813MB / 82.30 | 762MB / 82.20 | 735MB / 82.13 | 699MB / 82.05 | 690MB / 82.07 |
+
+(size / VMAF per cell.)
+
+- **The trend generalizes.** Every game shows the same monotonic favorable tradeoff, with
+  **no cliff by 0.15** in any of them -- 2026-04-19 is the only one where VMAF ticks up
+  fractionally from 0.3 to 0.15 (82.05→82.07) rather than down, essentially noise. `0.3` is
+  not overfit to the one worst-case field it was originally tuned on.
+- **Magnitude of the benefit varies by game** (10.8% smaller at 1.0→0.15 on 2025-09-13, up
+  to 22.6% on 2025-11-15_Game2) but doesn't line up cleanly with turf-vs-grass or
+  soccer-only-vs-dual-lined -- the two 1080p/old-camera games differ enough in other ways
+  (resolution, camera generation) from the 4K games that no clean surface-type signal comes
+  out of the variation alone.
+- **Decision: keep `0.3` as the default.** Confirmed as a safe, broadly-applicable value
+  across five different fields rather than one. `0.15` remains a viable option for someone
+  who wants to push size further for a small (~0.2-0.6 VMAF point) quality cost, but there's
+  no evidence any specific field *needs* a different value than the global default, which
+  weakens the case for the per-game override below.
 - **Make it a real CLI/`csm.yaml` option**, the same way `--crf`/`--preset` already are
-  (§12.1) rather than a fixed value in `_final_h265_args`. `psy_rd`/`aq_strength` are already
-  threaded through `sweep_args` for `--sweep`; the remaining work is the same pattern already
-  built for crf/preset — thread them through `final_h265_profile()`, add `--aq-strength`/
-  `--psy-rd` flags, and let `GAMEDIR/csm.yaml` persist them.
+  (§12.1) rather than a fixed value in `_final_h265_args`, remains available to build.
+  `psy_rd`/`aq_strength` are already threaded through `sweep_args` for `--sweep`; the
+  remaining work is the same pattern already built for crf/preset — thread them through
+  `final_h265_profile()`, add `--aq-strength`/`--psy-rd` flags, and let `GAMEDIR/csm.yaml`
+  persist them.
 - **Trigger to build the option:** as soon as a specific game's footage seems to want a
   different value than the global default — e.g. unusually uniform (low-motion, evenly-lit)
   content where a still-lower value might win more, or content where 0.3 turns out to be
-  already too aggressive.
+  already too aggressive. Not yet observed across the five games tested above.
 
 ---
 

@@ -29,13 +29,20 @@ GAMEDIR="$1"
 shift
 
 echo "=== step2: install software ==="
+date
 ./droplet-step2-install-software.sh
 
 echo "=== step3: download video ==="
+date
 ./droplet-step3-download-video.sh "$GAMEDIR"
 
 echo "=== step4: process video ==="
+date
 ./droplet-step4-process.video.sh "$GAMEDIR" "$@"
 
 echo "=== step5: upload video ==="
+date
 ./droplet-step5-upload-video.sh "$GAMEDIR"
+
+echo "=== all steps complete ==="
+date

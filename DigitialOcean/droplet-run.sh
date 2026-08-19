@@ -53,6 +53,8 @@ then
     exit 1
 fi
 
+echo "=== create ==="
+date
 ./droplet-create.sh
 
 # From here on, a failure must still reach the destroy-or-keep decision
@@ -61,6 +63,8 @@ fi
 # after (a droplet now exists and is billing).
 set +e
 
+echo "=== upload ==="
+date
 ./droplet-upload.sh
 upload_status=$?
 
@@ -77,6 +81,8 @@ fi
 
 if [[ $upload_status -eq 0 && -n $ssh_host ]];
 then
+    echo "=== run (droplet-all-steps.sh) ==="
+    date
     remote_cmd="CSM_BUCKET=$(printf '%q' "$CSM_BUCKET") ./droplet-all-steps.sh"
     for arg in "$GAMEDIR" "${csm_flags[@]}"; do
         remote_cmd+=" $(printf '%q' "$arg")"
@@ -96,6 +102,9 @@ else
 fi
 
 echo "Session log: ${log_file}"
+
+echo "=== destroy-or-keep decision ==="
+date
 
 if [[ $overall_status -eq 0 ]];
 then

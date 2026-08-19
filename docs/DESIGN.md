@@ -1382,24 +1382,50 @@ consistent with the README telling you to verify destruction in the UI. `droplet
 (containing a real SSH key ID) uncommitted — add `droplet-spec.local.json` to `.gitignore`
 and have `droplet-create.sh` prefer it.
 
-### 14.2 Full automation: stand-up → run → tear-down
+### 14.2 Full automation: stand-up → run → tear-down — built
 
 Hourly billing makes this matter: **every minute a human is not at the keyboard is billed
-anyway.** Today the flow is six interactive steps with an SSH reconnect after a reboot in
-the middle, so wall-clock time includes however long it takes someone to notice each step
-finished. The goal is one command that returns when the video is in Spaces and the droplet
+anyway.** The goal is one command that returns when the video is in Spaces and the droplet
 is gone.
 
 ```bash
-./droplet-run.sh GAMEDIR    # create → provision → fetch → encode → upload → destroy
+./droplet-run.sh [--keep-on-failure] GAMEDIR [csm sync/render flags...]
 ```
+
+**Built as two scripts, not one** — `droplet-all-steps.sh` runs steps 2–5 on the droplet with
+no user input, and `droplet-run.sh` wraps `create → upload → (ssh) all-steps → destroy`
+around it. Splitting them keeps the individual step scripts usable for manual debugging
+(`droplet-login.sh` is untouched) while still giving one-command automation. Neither step1
+nor step6 is in the chain — step1 can trigger a reboot, which would kill the very SSH session
+running the chain (a hard constraint, not a preference); step6 currently only prints a
+fill-in-the-blanks command rather than actually uploading anything, and needs a real rewrite
+(reading title/description from `GAMEDIR/metadata.yaml`, the same file `csm` already supports
+for embedding video metadata) before it can run unattended. Deferred until the rest is
+proven.
+
+`droplet-run.sh` passes `CSM_BUCKET` explicitly in the remote ssh command rather than relying
+on any rc-file/profile.d sourcing — a non-interactive `ssh host 'cmd'` session sources neither
+`~/.bashrc` nor `/etc/profile.d`, the same class of bug hit twice already for the interactive
+case (§ below).
+
+**Failure handling:** default is to always destroy when the run finishes (success or
+failure) — DESIGN's own risk framing (a droplet nobody destroys costs ~$950/month) argues for
+this, but every real bug found during manual testing this phase was found *because* the
+droplet was still alive to inspect afterward. `--keep-on-failure` leaves a failed droplet
+running instead, trading the cost-safety default for debuggability on demand. The session log
+(SSH output, streamed live and saved) is captured locally rather than uploaded from the
+droplet — `s3cmd` itself is only installed partway through step2, so an early failure would
+have no way to upload its own log; local capture works regardless of how far the run got.
 
 **v1 scope:** the orchestrator script and the tear-down safety below, built on top of the
 §14.1 bug fixes, using the existing from-scratch `apt-get install` provisioning (already
 sped up by deleting the ffmpeg source build). **Deferred:** pre-baked snapshot and
 cloud-init/`user_data` provisioning — genuine wins, but a second axis of infrastructure on
 top of getting the orchestrator and its safety net right first. Revisit either if
-provisioning time is still the dominant cost once the orchestrator is in real use.
+provisioning time is still the dominant cost once the orchestrator is in real use. Also
+deferred: the hard-deadline-armed-at-creation safety net below (third of the "three
+independent layers") — `--keep-on-failure` currently relies on the human remembering to come
+back, with no backstop yet if they don't.
 
 Time savings, in order of value:
 
@@ -1598,7 +1624,7 @@ replacement has been validated on real footage.
 | **1** — headline feature, zero render risk — **done** (`acc8980`) | **Spike first (§6.0):** raw GCC-PHAT against the two archived games, checked against ground truth. Only if that validates, build `csm probe` + `csm sync` (PHAT-only, creation-time hint, weighted-solve topology, manual `--clap-at`) and confirm against the same two games. Writes `sync.yaml`; add an `--offsets-seconds` entry point to the legacy script so it consumes them. Frame-hunting stops immediately; the render path is untouched. If the spike doesn't validate, stop here — manual sync continues and the rest of this phase isn't built. | 1–9           |
 | **2** — new pipeline, single process — **done** (`5d60742`) | `timeline`/`filtergraph`/`plan`/`runner`, one ffmpeg job, both intermediate passes deleted, 4K default, color-range fix, missing/short cameras working, `final-h265` only.                                                                                                      | 10–21, 26, 27 |
 | **3** — preview and polish — **done** (`6b80188`) | `--preview`, `--sweep` (with VMAF/xpsnr scoring), `--dry-run`. Small, and what makes phase 4 safe to iterate on.                                                                                                                                                                | 23–25         |
-| **4** — quality and droplet — **quality half done** (`c5fbf74`) | Run the sweep on real footage, lock CRF/preset for `final-h265`, record in README — done, plus `--field-cutoff`, `GAMEDIR/csm.yaml` persistence, and `--upload-mbps`, none of which were in the original phase scope but came directly out of real footage testing. Droplet: fix §14.1's bugs, build the `droplet-run.sh` orchestrator with three-layer self-destruct safety (no snapshot/cloud-init yet — see §14.2) — **not started**.                                          | —             |
+| **4** — quality and droplet — **quality half done** (`c5fbf74`) | Run the sweep on real footage, lock CRF/preset for `final-h265`, record in README — done, plus `--field-cutoff`, `GAMEDIR/csm.yaml` persistence, and `--upload-mbps`, none of which were in the original phase scope but came directly out of real footage testing. Droplet: §14.1's bugs fixed, `droplet-run.sh` orchestrator built — **two of three self-destruct layers done** (destroy-on-completion default, `--keep-on-failure` override; the third layer, a hard deadline armed at creation independent of the human coming back, is still deferred — see §14.2).                                          | —             |
 | **5** — Apple Silicon                      | Re-benchmark on arrival, re-tune `host.py`. Reconsider `final-av1`/`draft-vt` (§7.5) now that AV1 gets local playback, and reconsider chunking (§13.5) and droplet snapshot/cloud-init (§14.2) if either is still worth building.                                              | —             |
 
 Chunked encoding (§13.5), the envelope cross-method (§13.3), and automatic clap-detection

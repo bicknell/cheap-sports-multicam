@@ -1,5 +1,13 @@
 #!/bin/bash
 
+set -e
+
+if [[ -z $CSM_BUCKET ]];
+then
+    echo "Must set CSM_BUCKET (e.g. export CSM_BUCKET=loudoun-25-26-2012g-silver)."
+    exit 1
+fi
+
 if [[ -z $IPV4ONLY ]];
 then
     if [[ -f droplet.ipv6 ]];
@@ -40,3 +48,11 @@ else
 fi
 
 scp ${FILES[@]} "root@${ip}:"
+
+# /etc/profile.d/ (not ~/.bashrc) so it's picked up by any login shell,
+# including the one ./droplet-login.sh is about to open -- unlike a script
+# exporting PATH/vars for its own already-running session (see step2's
+# csm-not-in-PATH fix), this genuinely works because upload happens *before*
+# the session that needs it starts.
+printf 'export CSM_BUCKET=%q\n' "$CSM_BUCKET" | ssh "root@${ip}" "cat > /etc/profile.d/csm-bucket.sh"
+echo "CSM_BUCKET=${CSM_BUCKET} will be set automatically once you ./droplet-login.sh."

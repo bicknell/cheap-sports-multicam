@@ -4,3 +4,4 @@ droplet.ipv4
 droplet.ipv6
 droplet.created_at
 droplet-spec.local.json
+logs/

@@ -66,6 +66,10 @@ The rest of the scripts assume the Access Token is in `DIGITAL_OCEAN_TOKEN`:
 $ export DIGITAL_OCEAN_TOKEN="thetokenyoudownloaded"
 ```
 
+Run `ssh-add` for your droplet key before starting (`ssh-add ~/.ssh/id_whatever`) so you're
+only prompted for its passphrase once, instead of once per `scp`/`ssh` call across
+`droplet-upload.sh`/`droplet-login.sh`.
+
 ### Install Prereqs
 
 The scripts below need the following installed on your local machine:
@@ -76,10 +80,15 @@ The scripts below need the following installed on your local machine:
 
 ### Create the Droplet
 
-In this respository is a droplet-spec.json as a sample.  Customize with
-your SSH key ID, or get a  new spec by configuring a droplet the way you
-want in the UI and using the "CREATE VIA COMMAND LINE" link at the bottom
-to get the JSON for it.
+In this repository is `droplet-spec.json` as a sample. Copy it to
+`droplet-spec.local.json` (gitignored, so a real SSH key ID never gets committed) and
+customize, or get a new spec by configuring a droplet the way you want in the UI and using
+the "CREATE VIA COMMAND LINE" link at the bottom to get the JSON for it.
+`droplet-create.sh` prefers `droplet-spec.local.json` when present.
+
+DO only offers LTS releases as base images -- check `GET /v2/images?type=distribution` for
+the current slugs (e.g. `ubuntu-26-04-x64`) rather than assuming a specific interim release
+exists.
 
 > Experimenting with different server types resulted in the following.
 > Performance is vastly better on the "Premium Intel" CPUs over the
@@ -94,8 +103,10 @@ WARNING: USAGE CHARGES WILL START, YOU WILL BE BILLED HOURLY
 
 ### Upload Files
 
-Run `./droplet-upload.sh` to upload the necessary scripting and config to the
-droplet.  You will be promited for your SSH key passprhase, if it is set.
+Set `CSM_BUCKET` to your Space's bucket name (e.g. `export CSM_BUCKET=my-space-name`), then
+run `./droplet-upload.sh` to upload the necessary scripting and config to the droplet. It
+also writes `CSM_BUCKET` into `/etc/profile.d/` on the droplet, so it's already set in the
+shell `./droplet-login.sh` opens next -- no need to `export` it again on the droplet.
 
 NOTE: The script uses the IPv6 address by default.  If your network is not
       IPv6 set `export IPV4ONLY=true`
@@ -110,33 +121,37 @@ Log in to the droplet and run the scripts:
 ./droplet-login.sh
 ```
 
-Both `droplet-step3-download-video.sh` and `droplet-step5-upload-video.sh` need
-`CSM_BUCKET` set to your Space's bucket name, e.g. `export CSM_BUCKET=my-space-name`.
+On the droplet, run:
 
-On the droplet, run the scripts:
-
-1. `./droplet-step1-update.sh` will update the droplet and most likely have to reboot it.
-   - After it has rebooted run `./droplet-login.sh` to get back in before continuing.
-2. `./droplet-step2-install-software.sh` installs the necessary software:
+1. `./droplet-step2-install-software.sh` installs the necessary software:
    - ffmpeg, s3cmd, and the Python packages `csm` needs, from stock Ubuntu packages
      (falls back to a static ffmpeg build only if the stock package lacks `libx265`/`libsvtav1`)
    - clones the cheap-sports-multicam repository and installs `csm` from it into its own venv
-3. `./droplet-step3-download-video.sh GAMEDIR` will download the camera video from your
+2. `./droplet-step3-download-video.sh GAMEDIR` will download the camera video from your
    Space for processing.
    - This can be started in a second window as soon as s3cmd is installed in the previous
      step.  This helps reduce the total time the droplet is in use.
-4. `./droplet-step4-process.video.sh GAMEDIR [csm flags...]` runs `csm probe` / `csm sync
+3. `./droplet-step4-process.video.sh GAMEDIR [csm flags...]` runs `csm probe` / `csm sync
    --write` / `csm render` in sequence, printing the render's `--dry-run` output to
    `GAMEDIR/.csm/render.sh` as an audit trail before actually rendering. Any extra flags
    (e.g. `--field-cutoff`, `--crf`) are forwarded to `csm sync`/`csm render`. See
    `../docs/REFERENCE.md` for the full flag list.
-5. `./droplet-step5-upload-video.sh GAMEDIR` uploads the final video (`GAMEDIR/final_video.mp4`)
+4. `./droplet-step5-upload-video.sh GAMEDIR` uploads the final video (`GAMEDIR/final_video.mp4`)
    back to the Space.
-6. **OPTIONAL**  Upload the video to other sources.  The Droplet comes with a bunch of
+5. **OPTIONAL**  Upload the video to other sources.  The Droplet comes with a bunch of
    included bandwidth and generally has very good connectivity to the world.
    - [youtube-upload](https://github.com/tokland/youtube-upload) can send the video to YouTube.
 
 Log out of the droplet.
+
+**`droplet-step1-update.sh` is not part of this sequence.** A disposable droplet that lives
+about an hour and gets destroyed has no persistent attack surface worth patching -- a full
+`apt upgrade` costs real billed minutes (97 packages including kernel/grub/systemd measured
+on a fresh droplet) plus a reboot, and can hit an interactive dpkg conffile prompt (observed:
+openssh-server wanting to overwrite DO's customized `/etc/ssh/sshd_config`). Run it by hand
+only if you specifically want a fully-patched box; it's non-interactive now
+(`DEBIAN_FRONTEND=noninteractive`, keeps existing conffiles on conflict), but it will still
+reboot the droplet, so re-run `./droplet-login.sh` afterward.
 
 ### Destroy the Droplet
 

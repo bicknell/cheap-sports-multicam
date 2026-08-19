@@ -1,16 +1,33 @@
 #!/bin/bash
 
-if [ "$#" -ne 7 ]; then
-    echo "Error: Must specify directory and frame numbers"
-    echo "Usage: $0 <bucket-directory> f1 f2 f2 f3 f3 f4"
+set -e
+
+_start=$(date +%s)
+trap 'echo "[$(basename "$0")] total elapsed: $(( $(date +%s) - _start ))s"' EXIT
+
+if [ "$#" -lt 1 ]; then
+    echo "Error: game directory not specified"
+    echo "Usage: $0 <bucket-directory> [csm sync/render flags...]"
     exit 1
 fi
 
-TEMP_FILE=$(mktemp /tmp/cheap-sports-multicam.XXXXXX)
+GAMEDIR="$1"
+shift
 
-./cheap-sports-multicam/generate-ffmpeg.py $1 $2 $3 $4 $5 $6 $7 > $TEMP_FILE
+if [ ! -d "$GAMEDIR" ]; then
+    echo "Error: ${GAMEDIR} is not a directory (did step3's download finish?)"
+    exit 1
+fi
 
-bash $TEMP_FILE
+mkdir -p "$GAMEDIR/.csm"
+
+csm probe  "$GAMEDIR"
+csm sync   "$GAMEDIR" --write "$@"
+csm render "$GAMEDIR" --dry-run "$@" | tee "$GAMEDIR/.csm/render.sh"   # audit trail
+
+_encode_start=$(date +%s)
+csm render "$GAMEDIR" --profile final-h265 "$@"
+echo "[$(basename "$0")] encode wall time: $(( $(date +%s) - _encode_start ))s"
 
 echo "Alert!  Encoding is finished.!!!"
 for i in {1..10}

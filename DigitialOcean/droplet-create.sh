@@ -82,4 +82,41 @@ echo "$public_ipv4" > droplet.ipv4
 echo "$public_ipv6" > droplet.ipv6
 date -u +%s > droplet.created_at
 
+# The DO API reports status=active as soon as the VM is up, well before
+# sshd has finished starting -- droplet-upload.sh/droplet-login.sh will hit
+# "Connection refused" if they run immediately after this script returns.
+# Wait for port 22 to actually answer (raw TCP check via bash's /dev/tcp,
+# not a full SSH handshake, so it doesn't depend on key/agent setup).
+if [[ -z $IPV4ONLY ]];
+then
+    ssh_check_ip="$public_ipv6"
+else
+    ssh_check_ip="$public_ipv4"
+fi
+
+echo "Waiting for sshd on ${ssh_check_ip}..."
+ssh_max_wait_s=120
+ssh_poll_interval_s=5
+ssh_elapsed_s=0
+ssh_ready=false
+
+while [[ $ssh_elapsed_s -lt $ssh_max_wait_s ]];
+do
+    if (exec 3<>"/dev/tcp/${ssh_check_ip}/22") 2>/dev/null;
+    then
+        exec 3<&- 2>/dev/null
+        exec 3>&- 2>/dev/null
+        ssh_ready=true
+        break
+    fi
+    sleep "${ssh_poll_interval_s}"
+    ssh_elapsed_s=$((ssh_elapsed_s + ssh_poll_interval_s))
+done
+
+if [[ $ssh_ready != true ]];
+then
+    echo "sshd still not answering after ${ssh_max_wait_s}s -- it may just need more time."
+    echo "Try ./droplet-upload.sh or ./droplet-login.sh again shortly."
+fi
+
 echo "Droplet ${new_droplet_id} active at ${public_ipv4} (billing started $(date -u +%FT%TZ))."

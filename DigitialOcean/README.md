@@ -160,3 +160,31 @@ Run `./droplet-destroy.sh` to destroy the droplet.
 WARNING: ALL DATA ON THE DROPLET WILL BE LOST
 WARNING: VERIFY DESTRUCTION IN THE DIGITAL OCEAN UI TO VERIFY BILLING CEASED
 
+### Fully automated
+
+Everything above in one command, no user input required once it starts:
+
+```
+./droplet-run.sh [--keep-on-failure] GAMEDIR [csm sync/render flags...]
+```
+
+Needs `DIGITAL_OCEAN_TOKEN`, `CSM_BUCKET`, and a key already loaded in `ssh-agent` (it checks
+`ssh-add -l` up front and tells you to run `ssh-add` if not, rather than spending money before
+finding out). Runs `droplet-create.sh` → `droplet-upload.sh` → steps 2-5 unattended (via
+`droplet-all-steps.sh`, over a direct non-interactive `ssh` call -- `droplet-login.sh` itself
+is untouched, still useful for manual debugging) → `droplet-destroy.sh`.
+
+**Default is to always destroy when the run finishes, success or failure** -- a droplet
+nobody destroys is the expensive failure (~$950/month at $1.30/hr if forgotten). Pass
+`--keep-on-failure` to leave a failed droplet running instead, for debugging a particularly
+tricky problem; remember to `./droplet-destroy.sh` yourself when done with it.
+
+The whole SSH session is streamed to your terminal live *and* saved to
+`logs/droplet-run-GAMEDIR-TIMESTAMP.log` (gitignored) -- captured locally rather than
+uploaded from the droplet, since `s3cmd` itself is only installed partway through step2; an
+early failure would have no way to upload its own log.
+
+Not included: `droplet-step1-update.sh` (see above -- can't survive its own reboot inside an
+unattended chain anyway) and `droplet-step6-youtube.sh` (needs a real rewrite to run
+unattended instead of printing a fill-in-the-blanks command; deferred).
+

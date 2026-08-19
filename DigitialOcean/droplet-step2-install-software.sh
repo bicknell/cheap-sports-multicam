@@ -7,6 +7,22 @@ trap 'echo "[$(basename "$0")] elapsed: $(( $(date +%s) - _start ))s"' EXIT
 
 cd ~
 
+# The cheap 2vCPU/4GB testing tier can OOM-kill a real final-h265 encode --
+# observed for real (~3.55GB peak RSS against 4GB total, matching DESIGN.md
+# Sec 3.3's synthetic-benchmark prediction of 3.66GB for 4K 10-bit x265).
+# Add swap so functional testing stays on the cheap tier instead of needing
+# a pricier RAM size just to complete a render. Idempotent.
+if [[ -z $(swapon --show 2>/dev/null) ]];
+then
+    fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
+    echo "Swap enabled: $(swapon --show)"
+else
+    echo "Swap already configured, skipping."
+fi
+
 # Clone cheap-sports-multicam so we have the csm package. main doesn't have
 # it yet (DESIGN.md Sec 15: droplet work lands on csm-rewrite pre-merge).
 git clone --branch csm-rewrite https://github.com/bicknell/cheap-sports-multicam.git

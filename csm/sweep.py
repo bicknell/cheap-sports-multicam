@@ -90,14 +90,64 @@ def score(tool: Tool, capabilities: Capabilities, variant_path: Path, reference_
     return None, "none"
 
 
-def _render_reference(tool: Tool, window_tl: Timeline, output_path: Path) -> None:
+def _reference_job(window_tl: Timeline, output_path: Path) -> FfmpegJob:
     duration = window_tl.duration + 0.5 / float(window_tl.fps)
-    job = FfmpegJob(
+    return FfmpegJob(
         graph=build_filtergraph(window_tl),
         output_args=["-c:v", "ffv1", "-c:a", "flac", "-t", f"{duration:.6f}"],
         output_path=output_path,
     )
-    runner.run_job(tool, job)
+
+
+@dataclass
+class SweepPlan:
+    """Sec 12: --dry-run must be provably the same command that would have
+    run, for --sweep same as any other job. Building the jobs is pure --
+    no filesystem or process access -- so a dry-run can print exactly what
+    run_sweep() would execute without touching disk or spawning ffmpeg."""
+    window_tl: Timeline
+    reference_path: Path
+    reference_job: FfmpegJob
+    variant_jobs: list[tuple[str, dict[str, str], Path, FfmpegJob]]  # (label, overrides, output_path, job)
+
+
+def build_sweep_plan(
+    timeline: Timeline,
+    sweep_specs: list[str],
+    *,
+    at: list[str],
+    seconds: float,
+    output_dir: Path,
+    default_crf: str = encoders.DEFAULT_CRF,
+    default_preset: str = encoders.DEFAULT_PRESET,
+    default_psy_rd: str = encoders.DEFAULT_PSY_RD,
+    default_aq_strength: str = encoders.DEFAULT_AQ_STRENGTH,
+) -> SweepPlan:
+    label, t0, t1 = resolve_windows(timeline, at or ["middle"], seconds)[0]
+    window_tl = dataclasses.replace(timeline, t0=t0, t1=t1)
+
+    reference_path = output_dir / "sweep_reference.mkv"
+    reference_job = _reference_job(window_tl, reference_path)
+
+    variant_jobs = []
+    for overrides in variants(parse_sweep_specs(sweep_specs)):
+        vlabel = _variant_label(overrides)
+        output_path = output_dir / f"sweep_{vlabel}.mp4"
+        args = encoders.sweep_args(
+            window_tl,
+            encoder=overrides.get("encoder", "libx265"),
+            crf=overrides.get("crf", default_crf),
+            preset=overrides.get("preset", default_preset),
+            psy_rd=overrides.get("psy-rd", default_psy_rd),
+            aq_strength=overrides.get("aq-strength", default_aq_strength),
+        )
+        job = FfmpegJob(graph=build_filtergraph(window_tl), output_args=args, output_path=output_path)
+        variant_jobs.append((vlabel, overrides, output_path, job))
+
+    return SweepPlan(
+        window_tl=window_tl, reference_path=reference_path,
+        reference_job=reference_job, variant_jobs=variant_jobs,
+    )
 
 
 def run_sweep(
@@ -115,37 +165,27 @@ def run_sweep(
     default_psy_rd: str = encoders.DEFAULT_PSY_RD,
     default_aq_strength: str = encoders.DEFAULT_AQ_STRENGTH,
 ) -> list[SweepResult]:
-    label, t0, t1 = resolve_windows(timeline, at or ["middle"], seconds)[0]
-    window_tl = dataclasses.replace(timeline, t0=t0, t1=t1)
-
     output_dir.mkdir(parents=True, exist_ok=True)
-    reference_path = output_dir / "sweep_reference.mkv"
-    _render_reference(tool, window_tl, reference_path)
+    plan = build_sweep_plan(
+        timeline, sweep_specs, at=at, seconds=seconds, output_dir=output_dir,
+        default_crf=default_crf, default_preset=default_preset,
+        default_psy_rd=default_psy_rd, default_aq_strength=default_aq_strength,
+    )
+
+    runner.run_job(tool, plan.reference_job)
 
     results = []
-    for overrides in variants(parse_sweep_specs(sweep_specs)):
-        vlabel = _variant_label(overrides)
-        output_path = output_dir / f"sweep_{vlabel}.mp4"
-        args = encoders.sweep_args(
-            window_tl,
-            encoder=overrides.get("encoder", "libx265"),
-            crf=overrides.get("crf", default_crf),
-            preset=overrides.get("preset", default_preset),
-            psy_rd=overrides.get("psy-rd", default_psy_rd),
-            aq_strength=overrides.get("aq-strength", default_aq_strength),
-        )
-        job = FfmpegJob(graph=build_filtergraph(window_tl), output_args=args, output_path=output_path)
-
+    for vlabel, overrides, output_path, job in plan.variant_jobs:
         start = time.monotonic()
         runner.run_job(tool, job)
         wall = time.monotonic() - start
 
         size = output_path.stat().st_size
-        ratio = timeline.duration / window_tl.duration
+        ratio = timeline.duration / plan.window_tl.duration
         extrapolated_bytes = size * ratio
         upload_seconds = extrapolated_bytes * 8 / (upload_mbps * 1_000_000)
 
-        variant_score, metric = score(tool, capabilities, output_path, reference_path)
+        variant_score, metric = score(tool, capabilities, output_path, plan.reference_path)
         results.append(SweepResult(
             label=vlabel, overrides=overrides, wall_seconds=wall, size_bytes=size,
             extrapolated_full_bytes=extrapolated_bytes,

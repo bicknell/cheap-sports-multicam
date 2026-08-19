@@ -346,6 +346,22 @@ def cmd_preview(args: argparse.Namespace) -> int:
         default_preset = args.preset or config.preset or encoders.DEFAULT_PRESET
         default_psy_rd = args.psy_rd or config.psy_rd or encoders.DEFAULT_PSY_RD
         default_aq_strength = args.aq_strength or config.aq_strength or encoders.DEFAULT_AQ_STRENGTH
+
+        if args.dry_run:
+            plan = sweep.build_sweep_plan(
+                tl, args.sweep,
+                at=preview_at, seconds=args.preview_seconds, output_dir=output_dir,
+                default_crf=default_crf, default_preset=default_preset,
+                default_psy_rd=default_psy_rd, default_aq_strength=default_aq_strength,
+            )
+            work_dir = args.work_dir or (args.gamedir / ".csm")
+            print(f"# reference -> {plan.reference_path}")
+            print(runner.dry_run(tool, plan.reference_job, work_dir))
+            for vlabel, _overrides, output_path, job in plan.variant_jobs:
+                print(f"# variant {vlabel} -> {output_path}")
+                print(runner.dry_run(tool, job, work_dir))
+            return 0
+
         results = sweep.run_sweep(
             tool, capabilities, tl, args.sweep,
             at=preview_at, seconds=args.preview_seconds, output_dir=output_dir,

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from csm import encoders, ffmpeg as ffmpeg_mod, plan, preview as preview_mod, probe, runner, sources
+from csm import encoders, ffmpeg as ffmpeg_mod, plan, preview as preview_mod, probe, runner, sources, sweep
 from csm import timeline as timeline_mod
 
 
@@ -120,6 +120,39 @@ def test_dry_run_is_valid_shell(tool, tmp_path):
     command_line = script.strip("\n").split("\n")[-1]
     assert shlex.split(command_line) == expected_argv
     assert str(output) in expected_argv
+
+
+def test_sweep_dry_run_builds_jobs_without_running(tool, synthetic_game, tmp_path):
+    """--sweep must honor --dry-run the same as render/plain preview (Sec
+    12): build_sweep_plan() is pure -- no filesystem writes, no ffmpeg
+    process -- so cli.py's --sweep --dry-run branch can print each job's
+    command via runner.dry_run() instead of calling run_sweep()."""
+    game = synthetic_game({1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}, {1: 12.0, 2: 12.0, 3: 12.0, 4: 12.0})
+    infos = _probe_all(tool, game)
+    tl = timeline_mod.build_timeline(infos, {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}, fps=Fraction(30))
+
+    output_dir = tmp_path / "preview"
+    result = sweep.build_sweep_plan(
+        tl, ["psy-rd=0.5,1.0"], at=["middle"], seconds=2.0, output_dir=output_dir,
+    )
+
+    assert not output_dir.exists()  # pure: nothing written to disk yet
+    assert result.reference_path == output_dir / "sweep_reference.mkv"
+    assert [vlabel for vlabel, *_ in result.variant_jobs] == ["psy-rd-0.5", "psy-rd-1.0"]
+
+    for vlabel, overrides, output_path, job in result.variant_jobs:
+        assert output_path == output_dir / f"sweep_{vlabel}.mp4"
+        params = job.output_args[job.output_args.index("-x265-params") + 1]
+        assert f"psy-rd={overrides['psy-rd']}" in params
+
+    # runner.dry_run() renders each job's command without ever spawning
+    # ffmpeg or writing the sweep's own output files.
+    materialize_dir = tmp_path / ".csm"
+    ref_script = runner.dry_run(tool, result.reference_job, materialize_dir)
+    assert "-c:v ffv1" in ref_script
+    variant_script = runner.dry_run(tool, result.variant_jobs[0][3], materialize_dir)
+    assert "-c:v libx265" in variant_script
+    assert not output_dir.exists()
 
 
 # ---------------------------------------------------------- test 25 -------

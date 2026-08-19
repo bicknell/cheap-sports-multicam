@@ -2,9 +2,9 @@
 	"name":"video-encoding",
 	"size":"c-32-intel",
 	"region":"nyc2",
-	"image":"ubuntu-25-04-x64",
+	"image":"ubuntu-26-04-x64",
 	"ssh_keys": [
-	    <your_ssh_key_number>
+	    "<your_ssh_key_number>"
 	],
 	"backups": false,
 	"ipv6": true,

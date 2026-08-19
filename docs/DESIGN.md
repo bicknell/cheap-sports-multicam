@@ -1357,8 +1357,11 @@ project hard for others to adopt:
 apt-get install -y ffmpeg python3-numpy python3-scipy python3-yaml python3-venv s3cmd git
 ```
 
-Ubuntu 25.04 ships ffmpeg 7.1.x. If the version gate fails, fall back to a BtbN static build
-(~100 MB, ~30 s) rather than a 40-minute compile.
+DO's available Ubuntu image slugs are `ubuntu-22-04-x64`, `ubuntu-24-04-x64`, and
+`ubuntu-26-04-x64` (confirmed via `GET /v2/images?type=distribution`) — DO only offers LTS
+releases as base images, so the earlier "Ubuntu 25.04" assumption in this document was never
+buildable as a droplet image; use `ubuntu-26-04-x64`. If the stock package's version gate
+fails, fall back to a BtbN static build (~100 MB, ~30 s) rather than a 40-minute compile.
 
 **`droplet-step4-process.video.sh`** — drop the six positional frame integers and the
 `generate > tmpfile; bash tmpfile` dance:
@@ -1460,10 +1463,12 @@ halves the work**, so a one-hour total is now plausible and the right droplet ma
 
 Do **not** benchmark all seven variants. Three cheap measurements answer the question:
 
-1. **Ubuntu 25.04 stock ffmpeg capability check** — version, and whether `libx265` and
-   `libsvtav1` are present. Decides whether the from-source build can be deleted. A
-   **two-minute check** on the cheapest droplet; do it before touching any droplet script.
-   *(Could not be confirmed remotely — the packages.ubuntu.com lookup failed.)*
+1. **Ubuntu 26.04 (the newest LTS DO actually offers — see §14.1) stock ffmpeg capability
+   check** — version, and whether `libx265` and `libsvtav1` are present. Decides whether the
+   from-source build can be deleted. A **two-minute check** on the cheapest droplet; do it
+   before touching any droplet script. *(Could not be confirmed remotely — the
+   packages.ubuntu.com lookup failed — so step2 checks and falls back live instead of
+   assuming.)*
 2. **`csm self-test --bench` on Premium Intel 16-core and 32-core.** Same synthetic
    20-second 4K workload used on the Mac, so numbers are directly comparable. Two minutes
    per box — spin up, bench, destroy. Gives the core-scaling factor and finally *measures*
@@ -1623,8 +1628,9 @@ expressed as `--dry-run` with correct quoting.
     draft of this document assumed ~2 hours and drew the opposite conclusion.
 11. **GoPro timecode detection is unverified** — no GoPro footage available. Validate
     against a real file before writing code against §13.2.
-12. **Ubuntu 25.04's ffmpeg build flags are unconfirmed**; the capability probe is the real
-    safeguard, and §14.3 step 1 settles it.
+12. **Ubuntu 26.04's ffmpeg build flags are unconfirmed** (also: DO has no `ubuntu-25-04-x64`
+    image — only `ubuntu-22-04-x64`/`24-04-x64`/`26-04-x64`, confirmed against the API); the
+    capability probe is the real safeguard, and §14.3 step 1 settles it.
 13. **The encoder comparison in §3.3 used synthetic content**, which inflates absolute times
     and distorts CRF-to-size behaviour badly. Only its ratios are usable, and its CRF table
     must not be used for size budgeting.

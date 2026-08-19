@@ -2,67 +2,55 @@
 
 set -e
 
+_start=$(date +%s)
+trap 'echo "[$(basename "$0")] elapsed: $(( $(date +%s) - _start ))s"' EXIT
+
 cd ~
+mkdir -p ~/bin
 
-# Clone cheap-sports-multicam so we have the generate-ffmpeg.py script.
-git clone https://github.com/bicknell/cheap-sports-multicam.git
+# Clone cheap-sports-multicam so we have the csm package. main doesn't have
+# it yet (DESIGN.md Sec 15: droplet work lands on csm-rewrite pre-merge).
+git clone --branch csm-rewrite https://github.com/bicknell/cheap-sports-multicam.git
 
-# Install this as a separate step so we can use it in parallel.
-apt-get install -y s3cmd
+apt-get update -qq
+apt-get install -y ffmpeg python3-numpy python3-scipy python3-yaml python3-venv s3cmd git time
 
-# Compile lastest ffmpeg with libx265.
-# From https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu
-apt-get update -qq && sudo apt-get -y install \
-  autoconf \
-  automake \
-  build-essential \
-  cmake \
-  git-core \
-  libass-dev \
-  libfreetype6-dev \
-  libgnutls28-dev \
-  libmp3lame-dev \
-  libsdl2-dev \
-  libtool \
-  libva-dev \
-  libvdpau-dev \
-  libvorbis-dev \
-  libxcb1-dev \
-  libxcb-shm0-dev \
-  libxcb-xfixes0-dev \
-  meson \
-  ninja-build \
-  pkg-config \
-  texinfo \
-  wget \
-  yasm \
-  zlib1g-dev
+# DESIGN.md Sec 14.1/14.3: the old from-source ffmpeg build existed solely for
+# --enable-libfdk-aac, and commit 71d1585 ("Switch to libaac") removed the
+# only reason for it. Check rather than assume the stock package has what we
+# need -- fall back to a static build only if it doesn't.
+missing_codec=""
+for codec in libx265 libsvtav1; do
+    if ! ffmpeg -hide_banner -encoders 2>/dev/null | grep -qE "\b${codec}\b"; then
+        missing_codec="${missing_codec} ${codec}"
+    fi
+done
 
-apt install -y libunistring-dev libaom-dev libdav1d-dev
+if [[ -n $missing_codec ]];
+then
+    echo "Stock ffmpeg is missing:${missing_codec} -- falling back to a BtbN static build."
+    curl -sL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz" -o /tmp/ffmpeg-static.tar.xz
+    tar -xJf /tmp/ffmpeg-static.tar.xz -C /tmp
+    cp /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /tmp/ffmpeg-master-latest-linux64-gpl/bin/ffprobe ~/bin/
+    echo "Using static build: $(~/bin/ffmpeg -version | head -1)"
+else
+    echo "Stock ffmpeg has libx265 and libsvtav1: $(ffmpeg -version | head -1)"
+fi
 
-apt install -y nasm libx264-dev libx265-dev libnuma-dev libfdk-aac-dev
+# Install csm itself into its own venv, then expose the `csm` entry point on
+# PATH without requiring the venv to be activated interactively.
+cd ~/cheap-sports-multicam
+python3 -m venv ~/.csm-venv
+~/.csm-venv/bin/pip install -e .
+ln -sf ~/.csm-venv/bin/csm ~/bin/csm
 
-mkdir -p ~/ffmpeg_sources ~/bin
-cd ~/ffmpeg_sources && \
-wget -O ffmpeg-snapshot.tar.bz2 https://ffmpeg.org/releases/ffmpeg-snapshot.tar.bz2 && \
-tar xjvf ffmpeg-snapshot.tar.bz2 && \
-cd ffmpeg && \
-PATH="$HOME/bin:$PATH" PKG_CONFIG_PATH="$HOME/ffmpeg_build/lib/pkgconfig" ./configure \
-  --prefix="$HOME/ffmpeg_build" \
-  --pkg-config-flags="--static" \
-  --extra-cflags="-I$HOME/ffmpeg_build/include" \
-  --extra-ldflags="-L$HOME/ffmpeg_build/lib" \
-  --extra-libs="-lpthread -lm" \
-  --ld="g++" \
-  --bindir="$HOME/bin" \
-  --enable-gpl \
-  --enable-gnutls \
-  --enable-libfdk-aac \
-  --enable-libfreetype \
-  --enable-libx264 \
-  --enable-libx265 \
-  --enable-nonfree && \
-PATH="$HOME/bin:$PATH" make -j $(nproc) && \
-make install
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+export PATH="$HOME/bin:$PATH"
 
-echo "Make sure to set PATH=\"\$HOME/bin:\$PATH\""
+if csm --help > /dev/null 2>&1;
+then
+    echo "csm installed and runnable."
+else
+    echo "csm install failed -- 'csm --help' did not run cleanly."
+    exit 1
+fi

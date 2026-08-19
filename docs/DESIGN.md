@@ -1410,10 +1410,40 @@ Time savings, in order of value:
   build if provisioning time turns out to matter in practice.
 - **`user_data` / cloud-init instead of steps 1–2** *(deferred)*, when not using a snapshot,
   so provisioning runs during boot rather than after an SSH login.
-- **Drop the `apt upgrade` and reboot.** Several billed minutes to update a disposable box.
+- **Drop the `apt upgrade` and reboot — done, confirmed with real evidence.** A test run hit
+  97 packages including kernel/grub/systemd, a reboot, and an interactive dpkg conffile
+  prompt (openssh-server wanting to overwrite DO's customized `/etc/ssh/sshd_config`) — real
+  cost for a box with no persistent attack surface worth patching. Pulled from the default
+  workflow (README); the script is kept, made non-interactive, for anyone who wants a
+  fully-patched box anyway.
 - **Start the Spaces download at boot**, concurrent with remaining installs.
 - **Replace the fixed `sleep 15`** with polling until status is `active` *and* network
-  addresses are assigned.
+  addresses are assigned — done. Also had to add a second wait: `active` status doesn't mean
+  sshd has finished starting (`droplet-upload.sh` hit `Connection refused` running right
+  after `droplet-create.sh` returned on a real run), so `droplet-create.sh` now polls port 22
+  directly (raw TCP via `/dev/tcp`, not a full SSH handshake) before declaring the droplet
+  ready.
+
+**Two more bugs found only by running the real sequence, not by review:**
+
+- **A script's own `export PATH=...`/`~/.bashrc` append doesn't reach the shell that's
+  already running it from.** `droplet-step2-install-software.sh` installed `csm` to `~/bin`
+  and appended a PATH export to `~/.bashrc`, expecting it to be visible to
+  `droplet-step4-process.video.sh` run moments later in the *same* SSH session — it wasn't
+  (`csm: command not found`), because `~/.bashrc` is only read when a shell starts, and this
+  was the same already-open shell throughout. Fixed by installing straight to
+  `/usr/local/bin` instead, which needs no session/reload dependency at all.
+- **`CSM_BUCKET` has the same shape of problem, with the opposite fix.** Since
+  `droplet-upload.sh` runs *before* `droplet-login.sh` opens the session that needs the
+  variable, writing it to `/etc/profile.d/csm-bucket.sh` during upload genuinely works — the
+  login shell that reads it doesn't exist yet when the file is written.
+
+**Design note for `droplet-run.sh` when it's built:** any step where the script auto-continues
+past something a human would normally confirm (e.g. surviving a reboot and reconnecting on
+its own) should give a brief abort window first — a few seconds of "press any key to cancel"
+— rather than silently barreling ahead unattended. Moot for today's manual per-step testing
+(the human *is* the confirmation), but load-bearing once a single command runs the whole
+sequence unsupervised.
 
 Tear-down needs more care, because the expensive failure is the opposite one:
 
@@ -1463,12 +1493,9 @@ halves the work**, so a one-hour total is now plausible and the right droplet ma
 
 Do **not** benchmark all seven variants. Three cheap measurements answer the question:
 
-1. **Ubuntu 26.04 (the newest LTS DO actually offers — see §14.1) stock ffmpeg capability
-   check** — version, and whether `libx265` and `libsvtav1` are present. Decides whether the
-   from-source build can be deleted. A **two-minute check** on the cheapest droplet; do it
-   before touching any droplet script. *(Could not be confirmed remotely — the
-   packages.ubuntu.com lookup failed — so step2 checks and falls back live instead of
-   assuming.)*
+1. **Ubuntu 26.04 stock ffmpeg capability check — done** on a real `s-2vcpu-4gb` droplet:
+   8.0.1-3ubuntu2, both `libx265` and `libsvtav1` present. The from-source build is
+   confirmed unnecessary; see §17 risk 12.
 2. **`csm self-test --bench` on Premium Intel 16-core and 32-core.** Same synthetic
    20-second 4K workload used on the Mac, so numbers are directly comparable. Two minutes
    per box — spin up, bench, destroy. Gives the core-scaling factor and finally *measures*
@@ -1628,9 +1655,13 @@ expressed as `--dry-run` with correct quoting.
     draft of this document assumed ~2 hours and drew the opposite conclusion.
 11. **GoPro timecode detection is unverified** — no GoPro footage available. Validate
     against a real file before writing code against §13.2.
-12. **Ubuntu 26.04's ffmpeg build flags are unconfirmed** (also: DO has no `ubuntu-25-04-x64`
-    image — only `ubuntu-22-04-x64`/`24-04-x64`/`26-04-x64`, confirmed against the API); the
-    capability probe is the real safeguard, and §14.3 step 1 settles it.
+12. **Resolved: Ubuntu 26.04's stock ffmpeg is 8.0.1-3ubuntu2**, confirmed on a real droplet,
+    with `libx265` and `libsvtav1` both present — the capability probe's fallback path never
+    triggers. (Also resolved: DO has no `ubuntu-25-04-x64` image — only
+    `ubuntu-22-04-x64`/`24-04-x64`/`26-04-x64`.) No Ubuntu pocket ships ffmpeg 9.x, not even
+    the in-development next release (8.1.2 is the ceiling checked on packages.ubuntu.com) —
+    not worth chasing for parity with the 9.0.1 Mac build; 8.0.1 already has what
+    `final-h265` needs.
 13. **The encoder comparison in §3.3 used synthetic content**, which inflates absolute times
     and distorts CRF-to-size behaviour badly. Only its ratios are usable, and its CRF table
     must not be used for size budgeting.

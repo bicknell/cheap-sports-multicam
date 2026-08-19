@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -e
+
 if [ -f droplet-info.json ];
 then
     echo "droplet-info.json exists, do you already have a droplet running?"
@@ -17,30 +19,67 @@ then
     exit 1
 fi
 
+spec_file="droplet-spec.json"
+if [ -f droplet-spec.local.json ];
+then
+    spec_file="droplet-spec.local.json"
+fi
+echo "Using ${spec_file}."
+
 echo "Creating droplet."
 curl -s -X POST -H 'Content-Type: application/json' \
     -H "Authorization: Bearer ${DIGITAL_OCEAN_TOKEN}" \
-    -d @droplet-spec.json \
+    -d @"${spec_file}" \
     https://api.digitalocean.com/v2/droplets > droplet-info.json
 
-echo "Waiting for droplet..."
-sleep 15
+new_droplet_id=$(jq -r '.droplet.id' droplet-info.json)
 
-new_droplet_id=$(jq .droplet.id droplet-info.json)
+if [[ -z $new_droplet_id || $new_droplet_id == "null" ]];
+then
+    echo "Create request did not return a droplet id. Response:"
+    cat droplet-info.json
+    rm -f droplet-info.json
+    exit 1
+fi
 
-echo "Retrieving droplet details."
-curl -s -X GET \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer ${DIGITAL_OCEAN_TOKEN}" \
-    "https://api.digitalocean.com/v2/droplets/${new_droplet_id}" > droplet-details.json
+echo "Waiting for droplet ${new_droplet_id} to become active..."
+max_wait_s=180
+poll_interval_s=5
+elapsed_s=0
+status=""
+public_ipv4=""
 
-####
-#### NOT IN FILE
-####
-new_droplet_ipv4=$(jq -r '.droplets[].networks.v4[] | select(.type=="public") | .ip_address' droplet-details.json)
-new_droplet_ipv6=$(jq -r '.droplets[].networks.v6[] | select(.type=="public") | .ip_address' droplet-details.json)
+while [[ $elapsed_s -lt $max_wait_s ]];
+do
+    curl -s -X GET \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer ${DIGITAL_OCEAN_TOKEN}" \
+        "https://api.digitalocean.com/v2/droplets/${new_droplet_id}" > droplet-details.json
+
+    status=$(jq -r '.droplet.status' droplet-details.json)
+    public_ipv4=$(jq -r '.droplet.networks.v4[]? | select(.type=="public") | .ip_address' droplet-details.json)
+
+    if [[ $status == "active" && -n $public_ipv4 ]];
+    then
+        break
+    fi
+
+    sleep "${poll_interval_s}"
+    elapsed_s=$((elapsed_s + poll_interval_s))
+done
+
+if [[ $status != "active" || -z $public_ipv4 ]];
+then
+    echo "Droplet ${new_droplet_id} did not become active with a public IP within ${max_wait_s}s (status: ${status})."
+    echo "It may still be billing -- check the DigitalOcean UI, and run ./droplet-destroy.sh if needed."
+    exit 1
+fi
+
+public_ipv6=$(jq -r '.droplet.networks.v6[]? | select(.type=="public") | .ip_address' droplet-details.json)
 
 echo "Writing out IP addresses."
-echo "$new_droplet_ipv4" > droplet.ipv4
-echo "$new_droplet_ipv6" > droplet.ipv6
+echo "$public_ipv4" > droplet.ipv4
+echo "$public_ipv6" > droplet.ipv6
+date -u +%s > droplet.created_at
 
+echo "Droplet ${new_droplet_id} active at ${public_ipv4} (billing started $(date -u +%FT%TZ))."

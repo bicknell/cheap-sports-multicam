@@ -41,7 +41,16 @@ for arg in "$@"; do
 done
 
 csm probe  "$GAMEDIR"
-csm sync   "$GAMEDIR" --write "${shared_flags[@]}"
+
+# If sync.yaml is already there, it came from a local `csm sync --write`
+# uploaded alongside the footage -- trust it and skip re-detection rather
+# than silently overwriting an already-vetted result.
+if [ -f "$GAMEDIR/sync.yaml" ]; then
+    echo "sync.yaml already present -- skipping csm sync"
+else
+    csm sync "$GAMEDIR" --write "${shared_flags[@]}"
+fi
+
 csm render "$GAMEDIR" --dry-run "${shared_flags[@]}" "${render_only_flags[@]}" | tee "$GAMEDIR/.csm/render.sh"   # audit trail
 
 _encode_start=$(date +%s)

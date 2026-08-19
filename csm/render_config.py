@@ -18,6 +18,8 @@ class RenderConfig:
     field_cutoff: dict[int, int]
     crf: str | None = None
     preset: str | None = None
+    psy_rd: str | None = None
+    aq_strength: str | None = None
 
 
 def load_render_config(game_dir: Path) -> RenderConfig:
@@ -29,4 +31,9 @@ def load_render_config(game_dir: Path) -> RenderConfig:
     field_cutoff = {int(k): int(v) for k, v in (raw.get("field_cutoff") or {}).items()}
     crf = str(raw["crf"]) if raw.get("crf") is not None else None
     preset = str(raw["preset"]) if raw.get("preset") is not None else None
-    return RenderConfig(field_cutoff=field_cutoff, crf=crf, preset=preset)
+    psy_rd = str(raw["psy_rd"]) if raw.get("psy_rd") is not None else None
+    aq_strength = str(raw["aq_strength"]) if raw.get("aq_strength") is not None else None
+    return RenderConfig(
+        field_cutoff=field_cutoff, crf=crf, preset=preset,
+        psy_rd=psy_rd, aq_strength=aq_strength,
+    )

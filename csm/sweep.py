@@ -112,6 +112,8 @@ def run_sweep(
     upload_mbps: float = DEFAULT_UPLOAD_MBPS,
     default_crf: str = encoders.DEFAULT_CRF,
     default_preset: str = encoders.DEFAULT_PRESET,
+    default_psy_rd: str = encoders.DEFAULT_PSY_RD,
+    default_aq_strength: str = encoders.DEFAULT_AQ_STRENGTH,
 ) -> list[SweepResult]:
     label, t0, t1 = resolve_windows(timeline, at or ["middle"], seconds)[0]
     window_tl = dataclasses.replace(timeline, t0=t0, t1=t1)
@@ -129,8 +131,8 @@ def run_sweep(
             encoder=overrides.get("encoder", "libx265"),
             crf=overrides.get("crf", default_crf),
             preset=overrides.get("preset", default_preset),
-            psy_rd=overrides.get("psy-rd", encoders.DEFAULT_PSY_RD),
-            aq_strength=overrides.get("aq-strength", encoders.DEFAULT_AQ_STRENGTH),
+            psy_rd=overrides.get("psy-rd", default_psy_rd),
+            aq_strength=overrides.get("aq-strength", default_aq_strength),
         )
         job = FfmpegJob(graph=build_filtergraph(window_tl), output_args=args, output_path=output_path)
 

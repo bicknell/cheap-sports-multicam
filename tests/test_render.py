@@ -255,46 +255,70 @@ def test_render_config_missing_file_is_empty(tmp_path):
     assert config.field_cutoff == {}
     assert config.crf is None
     assert config.preset is None
+    assert config.psy_rd is None
+    assert config.aq_strength is None
 
 
 def test_render_config_parses_csm_yaml(tmp_path):
     (tmp_path / "csm.yaml").write_text(
         "field_cutoff: {1: 880, 2: 910}\ncrf: '25'\npreset: medium\n"
+        "psy_rd: '1.5'\naq_strength: '0.2'\n"
     )
     config = render_config.load_render_config(tmp_path)
     assert config.field_cutoff == {1: 880, 2: 910}
     assert config.crf == "25"
     assert config.preset == "medium"
+    assert config.psy_rd == "1.5"
+    assert config.aq_strength == "0.2"
 
 
 def test_resolve_profile_layering():
-    """GAMEDIR/csm.yaml provides the default; an explicit --crf/--preset on
-    the command line still wins for that one run (same override pattern as
-    --offset/--nudge over sync.yaml). A non-final-h265 --profile bypasses
-    persisted crf/preset entirely -- they don't mean the same thing there."""
-    Args = namedtuple("Args", ["profile", "crf", "preset"])
+    """GAMEDIR/csm.yaml provides the default; an explicit --crf/--preset/
+    --psy-rd/--aq-strength on the command line still wins for that one run
+    (same override pattern as --offset/--nudge over sync.yaml). A
+    non-final-h265 --profile bypasses all persisted values entirely -- they
+    don't mean the same thing there."""
+    Args = namedtuple("Args", ["profile", "crf", "preset", "psy_rd", "aq_strength"])
+
+    def x265_params(profile):
+        args_out = profile.output_args(_timeline([_track(c) for c in (1, 2, 3, 4)]))
+        return args_out, args_out[args_out.index("-x265-params") + 1]
 
     no_config = render_config.RenderConfig(field_cutoff={})
-    args = Args(profile="final-h265", crf=None, preset=None)
+    args = Args(profile="final-h265", crf=None, preset=None, psy_rd=None, aq_strength=None)
     profile = cli._resolve_profile(args, no_config)
     assert profile.name == "final-h265"
-    args_out = profile.output_args(_timeline([_track(c) for c in (1, 2, 3, 4)]))
+    args_out, params = x265_params(profile)
     assert args_out[args_out.index("-crf") + 1] == encoders.DEFAULT_CRF
     assert args_out[args_out.index("-preset") + 1] == encoders.DEFAULT_PRESET
+    assert f"psy-rd={encoders.DEFAULT_PSY_RD}" in params
+    assert f"aq-strength={encoders.DEFAULT_AQ_STRENGTH}" in params
 
-    persisted = render_config.RenderConfig(field_cutoff={}, crf="25", preset="medium")
-    profile = cli._resolve_profile(Args(profile="final-h265", crf=None, preset=None), persisted)
-    args_out = profile.output_args(_timeline([_track(c) for c in (1, 2, 3, 4)]))
+    persisted = render_config.RenderConfig(
+        field_cutoff={}, crf="25", preset="medium", psy_rd="1.5", aq_strength="0.2",
+    )
+    profile = cli._resolve_profile(
+        Args(profile="final-h265", crf=None, preset=None, psy_rd=None, aq_strength=None), persisted,
+    )
+    args_out, params = x265_params(profile)
     assert args_out[args_out.index("-crf") + 1] == "25"
     assert args_out[args_out.index("-preset") + 1] == "medium"
+    assert "psy-rd=1.5" in params
+    assert "aq-strength=0.2" in params
 
     # explicit CLI flag wins over the persisted value
-    profile = cli._resolve_profile(Args(profile="final-h265", crf="21", preset=None), persisted)
-    args_out = profile.output_args(_timeline([_track(c) for c in (1, 2, 3, 4)]))
+    profile = cli._resolve_profile(
+        Args(profile="final-h265", crf="21", preset=None, psy_rd="0.8", aq_strength=None), persisted,
+    )
+    args_out, params = x265_params(profile)
     assert args_out[args_out.index("-crf") + 1] == "21"
     assert args_out[args_out.index("-preset") + 1] == "medium"
+    assert "psy-rd=0.8" in params
+    assert "aq-strength=0.2" in params
 
-    other = cli._resolve_profile(Args(profile="preview-x265", crf="99", preset=None), persisted)
+    other = cli._resolve_profile(
+        Args(profile="preview-x265", crf="99", preset=None, psy_rd=None, aq_strength=None), persisted,
+    )
     assert other.name == "preview-x265"
 
 

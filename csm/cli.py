@@ -280,14 +280,21 @@ def _load_metadata(gamedir: Path) -> dict[str, str]:
 def _resolve_profile(
     args: argparse.Namespace, config: render_config.RenderConfig,
 ) -> encoders.EncoderProfile:
-    """--crf/--preset (or their GAMEDIR/csm.yaml persisted defaults) only
-    apply to final-h265 -- an explicitly-chosen other --profile is used
-    as-is, since CRF/preset don't mean the same thing across profiles."""
+    """--crf/--preset/--psy-rd/--aq-strength (or their GAMEDIR/csm.yaml
+    persisted defaults) only apply to final-h265 -- an explicitly-chosen
+    other --profile is used as-is, since these don't mean the same thing
+    across profiles."""
     if args.profile != "final-h265":
         return encoders.get_profile(args.profile)
     crf = args.crf or config.crf or encoders.DEFAULT_CRF
     preset = args.preset or config.preset or encoders.DEFAULT_PRESET
-    return encoders.final_h265_profile(crf=crf, preset=preset)
+    psy_rd = getattr(args, "psy_rd", None) or config.psy_rd or encoders.DEFAULT_PSY_RD
+    aq_strength = (
+        getattr(args, "aq_strength", None) or config.aq_strength or encoders.DEFAULT_AQ_STRENGTH
+    )
+    return encoders.final_h265_profile(
+        crf=crf, preset=preset, psy_rd=psy_rd, aq_strength=aq_strength,
+    )
 
 
 def cmd_render(args: argparse.Namespace) -> int:
@@ -337,11 +344,14 @@ def cmd_preview(args: argparse.Namespace) -> int:
     if args.sweep:
         default_crf = args.crf or config.crf or encoders.DEFAULT_CRF
         default_preset = args.preset or config.preset or encoders.DEFAULT_PRESET
+        default_psy_rd = args.psy_rd or config.psy_rd or encoders.DEFAULT_PSY_RD
+        default_aq_strength = args.aq_strength or config.aq_strength or encoders.DEFAULT_AQ_STRENGTH
         results = sweep.run_sweep(
             tool, capabilities, tl, args.sweep,
             at=preview_at, seconds=args.preview_seconds, output_dir=output_dir,
             upload_mbps=args.upload_mbps,
             default_crf=default_crf, default_preset=default_preset,
+            default_psy_rd=default_psy_rd, default_aq_strength=default_aq_strength,
         )
         print(sweep.format_results(results, upload_mbps=args.upload_mbps))
         return 0
@@ -449,6 +459,16 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Overrides GAMEDIR/csm.yaml's persisted value, or the default "
              f"({encoders.DEFAULT_PRESET}). Only meaningful with --profile final-h265",
     )
+    p_render.add_argument(
+        "--psy-rd", dest="psy_rd", default=None,
+        help=f"Overrides GAMEDIR/csm.yaml's persisted value, or the default "
+             f"({encoders.DEFAULT_PSY_RD}). Only meaningful with --profile final-h265",
+    )
+    p_render.add_argument(
+        "--aq-strength", dest="aq_strength", default=None,
+        help=f"Overrides GAMEDIR/csm.yaml's persisted value, or the default "
+             f"({encoders.DEFAULT_AQ_STRENGTH}). Only meaningful with --profile final-h265",
+    )
     p_render.add_argument("--output", type=Path, default=None)
     p_render.add_argument("--work-dir", type=Path, default=None)
     p_render.add_argument("--dry-run", action="store_true")
@@ -503,6 +523,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--preset", default=None,
         help=f"With --sweep: baseline preset for dimensions not swept over. Overrides "
              f"GAMEDIR/csm.yaml's persisted value, or the default ({encoders.DEFAULT_PRESET})",
+    )
+    p_preview.add_argument(
+        "--psy-rd", dest="psy_rd", default=None,
+        help=f"With --sweep: baseline psy-rd for dimensions not swept over. Overrides "
+             f"GAMEDIR/csm.yaml's persisted value, or the default ({encoders.DEFAULT_PSY_RD})",
+    )
+    p_preview.add_argument(
+        "--aq-strength", dest="aq_strength", default=None,
+        help=f"With --sweep: baseline aq-strength for dimensions not swept over. Overrides "
+             f"GAMEDIR/csm.yaml's persisted value, or the default ({encoders.DEFAULT_AQ_STRENGTH})",
     )
     p_preview.add_argument(
         "--upload-mbps", type=float, default=sweep.DEFAULT_UPLOAD_MBPS,

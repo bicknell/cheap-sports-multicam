@@ -24,7 +24,10 @@ DEFAULT_PSY_RD = "2.0"
 DEFAULT_AQ_STRENGTH = "0.3"
 
 
-def _final_h265_args(timeline: Timeline, *, crf: str, preset: str) -> list[str]:
+def _final_h265_args(
+    timeline: Timeline, *, crf: str, preset: str,
+    psy_rd: str = DEFAULT_PSY_RD, aq_strength: str = DEFAULT_AQ_STRENGTH,
+) -> list[str]:
     gop = 2 * round(float(timeline.fps))
     # colorprim/transfer/colormatrix/range are repeated here in
     # -x265-params, not just the generic -color_* flags below: on this
@@ -34,7 +37,7 @@ def _final_h265_args(timeline: Timeline, *, crf: str, preset: str) -> list[str]:
     # The -x265-params form is what actually round-trips all four tags.
     x265_params = (
         f"keyint={gop}:min-keyint={gop}:no-open-gop=1:repeat-headers=1:"
-        f"aq-mode=3:aq-strength={DEFAULT_AQ_STRENGTH}:psy-rd={DEFAULT_PSY_RD}:psy-rdoq=1.0:"
+        f"aq-mode=3:aq-strength={aq_strength}:psy-rd={psy_rd}:psy-rdoq=1.0:"
         f"rc-lookahead=40:ref=4:"
         f"colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"
     )
@@ -55,15 +58,20 @@ def _final_h265_args(timeline: Timeline, *, crf: str, preset: str) -> list[str]:
     ]
 
 
-def final_h265_profile(*, crf: str = DEFAULT_CRF, preset: str = DEFAULT_PRESET) -> EncoderProfile:
-    """CRF/preset picked via a real --sweep (Sec 7.2) can be persisted per
-    game in GAMEDIR/csm.yaml rather than retyped on every render -- this
-    builds a fresh profile with those values baked in, instead of the one
-    fixed FINAL_H265 instance. Name stays "final-h265" either way; only the
-    tuning underneath changes."""
+def final_h265_profile(
+    *, crf: str = DEFAULT_CRF, preset: str = DEFAULT_PRESET,
+    psy_rd: str = DEFAULT_PSY_RD, aq_strength: str = DEFAULT_AQ_STRENGTH,
+) -> EncoderProfile:
+    """CRF/preset/psy-rd/aq-strength picked via a real --sweep (Sec 7.2,
+    13.6) can be persisted per game in GAMEDIR/csm.yaml rather than retyped
+    on every render -- this builds a fresh profile with those values baked
+    in, instead of the one fixed FINAL_H265 instance. Name stays
+    "final-h265" either way; only the tuning underneath changes."""
     return EncoderProfile(
         name="final-h265",
-        build_args=lambda timeline: _final_h265_args(timeline, crf=crf, preset=preset),
+        build_args=lambda timeline: _final_h265_args(
+            timeline, crf=crf, preset=preset, psy_rd=psy_rd, aq_strength=aq_strength,
+        ),
     )
 
 

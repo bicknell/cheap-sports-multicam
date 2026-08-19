@@ -31,7 +31,7 @@ then
     exit 1
 fi
 
-FILES=(droplet-step*)
+FILES=(droplet-step* droplet-all-steps.sh)
 
 if [[ -f ~/.s3cfg ]]; then
     FILES+=(~/.s3cfg)

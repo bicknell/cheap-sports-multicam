@@ -110,24 +110,28 @@ Log in to the droplet and run the scripts:
 ./droplet-login.sh
 ```
 
+Both `droplet-step3-download-video.sh` and `droplet-step5-upload-video.sh` need
+`CSM_BUCKET` set to your Space's bucket name, e.g. `export CSM_BUCKET=my-space-name`.
+
 On the droplet, run the scripts:
 
 1. `./droplet-step1-update.sh` will update the droplet and most likely have to reboot it.
    - After it has rebooted run `./droplet-login.sh` to get back in before continuing.
 2. `./droplet-step2-install-software.sh` installs the necessary software:
-   - s3cmd
-   - clone the cheap-sports-multicam repository
-   - Prereqs to build ffmpeg.
-   - Build ffmpeg.
+   - ffmpeg, s3cmd, and the Python packages `csm` needs, from stock Ubuntu packages
+     (falls back to a static ffmpeg build only if the stock package lacks `libx265`/`libsvtav1`)
+   - clones the cheap-sports-multicam repository and installs `csm` from it into its own venv
 3. `./droplet-step3-download-video.sh GAMEDIR` will download the camera video from your
    Space for processing.
    - This can be started in a second window as soon as s3cmd is installed in the previous
      step.  This helps reduce the total time the droplet is in use.
-4. `./droplet-step4--process-video.sh GAMEDIR f1 f2 f3 f4 f5 f6` will run the generate-ffmpeg.py
-   script to build the ffmpeg command lines, and will then execute the ffmpeg command lines.
-   This process will likely take about 2 hours.  The f1-f6 arguments are the frames to sync,
-   see the documentation up a directory.
-5. `./droplet-step5-upload-video.sh GAMEDIR` uploads the final video back to the Space.
+4. `./droplet-step4-process.video.sh GAMEDIR [csm flags...]` runs `csm probe` / `csm sync
+   --write` / `csm render` in sequence, printing the render's `--dry-run` output to
+   `GAMEDIR/.csm/render.sh` as an audit trail before actually rendering. Any extra flags
+   (e.g. `--field-cutoff`, `--crf`) are forwarded to `csm sync`/`csm render`. See
+   `../docs/REFERENCE.md` for the full flag list.
+5. `./droplet-step5-upload-video.sh GAMEDIR` uploads the final video (`GAMEDIR/final_video.mp4`)
+   back to the Space.
 6. **OPTIONAL**  Upload the video to other sources.  The Droplet comes with a bunch of
    included bandwidth and generally has very good connectivity to the world.
    - [youtube-upload](https://github.com/tokland/youtube-upload) can send the video to YouTube.

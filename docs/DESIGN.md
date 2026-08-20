@@ -735,7 +735,8 @@ Four things follow, and they matter more than the table:
 ```
 -c:v libx265 -preset fast -crf 23 -pix_fmt yuv420p10le -profile:v main10
 -x265-params keyint={2*fps}:min-keyint={2*fps}:no-open-gop=1:repeat-headers=1:
-             aq-mode=3:aq-strength=0.3:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=40:ref=4
+             aq-mode=3:aq-strength=0.3:psy-rd=2.0:psy-rdoq=1.0:rc-lookahead=40:ref=4:
+             pmode=1:frame-threads=8
 -color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv
 -tag:v hvc1
 -c:a aac -b:a 192k -ar 48000 -ac 2
@@ -760,6 +761,22 @@ See §13.6: a follow-up sweep across five fields (grass/turf, shiny/matte, socce
 dual-lined) confirmed `0.3` generalizes rather than being overfit to the one worst-case
 field it was tuned on, and is kept as the default. `--psy-rd`/`--aq-strength` are now real
 CLI/`csm.yaml` options (§12.1) rather than fixed values, same pattern as `--crf`/`--preset`.
+
+**`pmode=1` added 2026-08-20** (default off), not from a `--sweep` measurement like the
+others above but from x265's own documentation: it distributes CU-level mode decision
+(merge/inter/intra) across worker threads, is recommended specifically when x265 isn't
+already saturating available cores, and is documented to increase utilization without
+reducing compression efficiency (unlike `frame-threads`, which trades reference lag for
+more in-flight frames). Motivated by a real `c-32-intel` droplet render observed sitting
+at ~24/32 cores during the encode phase -- `frameNumThreads` auto-detects to a fixed 6 for
+any 4K (`sourceHeight > 2000`) output on ≥32 cores (`ThreadPool::getFrameThreadsCount` in
+x265's `threadpool.cpp`), independent of core count above that threshold. **`frame-threads=8` added the same day**, overriding that auto-detected 6 -- explicitly
+against x265's own default for this resolution/core-count combination, not just filling a
+gap. x265's docs warn this can be counter-productive (more reference lag between the
+now-more in-flight frames, more memory per frame-thread) even though it isn't on this
+box (64GB, nowhere near pressured). Both changes are untested against a real before/after
+render as of this writing -- worth a real sweep (wall-time and VMAF both) once there's a
+same-game comparison to run, same as everything else in this section.
 
 **Treat all of this as provisional**, not final: re-sweep after real experience with
 `--field-cutoff` (§7.7) and again on any new hardware (droplet, Apple Silicon) — see

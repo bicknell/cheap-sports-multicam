@@ -38,7 +38,7 @@ def _final_h265_args(
     x265_params = (
         f"keyint={gop}:min-keyint={gop}:no-open-gop=1:repeat-headers=1:"
         f"aq-mode=3:aq-strength={aq_strength}:psy-rd={psy_rd}:psy-rdoq=1.0:"
-        f"rc-lookahead=40:ref=4:"
+        f"rc-lookahead=40:ref=4:pmode=1:frame-threads=8:"
         f"colorprim=bt709:transfer=bt709:colormatrix=bt709:range=limited"
     )
     # A +0.5-frame epsilon on -t: ffmpeg's output truncation drops the
@@ -173,7 +173,7 @@ def sweep_args(
         x265_params = (
             f"keyint={gop}:min-keyint={gop}:no-open-gop=1:repeat-headers=1:"
             f"aq-mode=3:aq-strength={aq_strength}:psy-rd={psy_rd}:psy-rdoq=1.0:"
-            f"rc-lookahead=40:ref=4"
+            f"rc-lookahead=40:ref=4:pmode=1:frame-threads=8"
         )
         video = [
             "-c:v", "libx265", "-preset", preset, "-crf", crf,

@@ -49,7 +49,11 @@ def _input_args(ref: InputRef, tmpdir: Path, index: int) -> list[str]:
 
 
 def build_argv(tool: Tool, job: FfmpegJob, tmpdir: Path) -> list[str]:
-    argv = [tool.ffmpeg, "-y", "-v", "error"]
+    # -v error suppresses ffmpeg's stats line by default, so -stats has to
+    # be requested explicitly to get it back; -stats_period thins it to
+    # every 5 minutes of wall time instead of the noisy 0.5s default --
+    # useful for watching multi-hour renders without flooding the log.
+    argv = [tool.ffmpeg, "-y", "-v", "error", "-stats", "-stats_period", "300"]
     for i, ref in enumerate(job.graph.inputs):
         argv += _input_args(ref, tmpdir, i)
     argv += ["-filter_complex", job.graph.filter_complex]

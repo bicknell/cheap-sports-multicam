@@ -40,8 +40,12 @@ def _parse_audio_cams(spec: str) -> tuple[int, ...]:
     return tuple(int(x) for x in spec.split(","))
 
 
-def _parse_mmss(spec: str) -> float:
+def _parse_time(spec: str) -> float:
+    """SECONDS, MM:SS, or HH:MM:SS."""
     parts = spec.split(":")
+    if len(parts) == 3:
+        hh, mm, ss = parts
+        return int(hh) * 3600 + int(mm) * 60 + float(ss)
     if len(parts) == 2:
         mm, ss = parts
         return int(mm) * 60 + float(ss)
@@ -49,22 +53,23 @@ def _parse_mmss(spec: str) -> float:
 
 
 def _parse_clap_at(spec: str) -> float:
-    return _parse_mmss(spec)
+    return _parse_time(spec)
 
 
 def _parse_start_end(spec: str, offsets: dict[int, float]) -> float:
-    """Plain SECONDS or MM:SS on the common timeline, or CAM@SECONDS /
-    CAM@MM:SS -- a point in camera CAM's own raw footage, resolved via
-    sync.yaml's offset(CAM) to the equivalent common-timeline second. Lets
-    you scrub whichever camera is convenient rather than mentally
-    translating through the timeline's own origin (Sec 12)."""
+    """Plain SECONDS, MM:SS, or HH:MM:SS on the common timeline, or
+    CAM@SECONDS / CAM@MM:SS / CAM@HH:MM:SS -- a point in camera CAM's own
+    raw footage, resolved via sync.yaml's offset(CAM) to the equivalent
+    common-timeline second. Lets you scrub whichever camera is convenient
+    rather than mentally translating through the timeline's own origin
+    (Sec 12)."""
     if "@" in spec:
         cam_str, _, rest = spec.partition("@")
         cam = int(cam_str)
         if cam not in offsets:
             raise ValueError(f"camera {cam} not in sync offsets (have: {sorted(offsets)})")
-        return offsets[cam] + _parse_mmss(rest)
-    return _parse_mmss(spec)
+        return offsets[cam] + _parse_time(rest)
+    return _parse_time(spec)
 
 
 def _parse_out_size(spec: str, infos: dict[int, probe.CameraInfo]) -> tuple[int, int]:
@@ -430,7 +435,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sync.add_argument("--max-offset", type=float, default=1800.0)
     p_sync.add_argument("--min-confidence", type=float, default=6.0)
     p_sync.add_argument(
-        "--clap-at", default=None, metavar="MM:SS",
+        "--clap-at", default=None, metavar="SEC|MM:SS|HH:MM:SS",
         help="Timestamp of a deliberate clap/clapperboard at midfield, on camera 1's own "
              "raw clock only (not any other camera, and not the aligned render timeline)",
     )
@@ -446,15 +451,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--align-start", choices=("latest", "earliest"), default="latest")
     p_render.add_argument("--align-end", choices=("longest", "shortest"), default="longest")
     p_render.add_argument(
-        "--start", default=None, metavar="SEC|MM:SS|CAM@SEC|CAM@MM:SS",
+        "--start", default=None, metavar="SEC|MM:SS|HH:MM:SS|CAM@...",
         help="Point on the common timeline, or a point in camera CAM's own raw "
              "footage (e.g. 2@5:24 -- 5:24 into camera 2), resolved via sync.yaml",
     )
     p_render.add_argument(
-        "--end", default=None, metavar="SEC|MM:SS|CAM@SEC|CAM@MM:SS",
+        "--end", default=None, metavar="SEC|MM:SS|HH:MM:SS|CAM@...",
         help="Same syntax as --start",
     )
-    p_render.add_argument("--duration", type=float, default=None)
+    p_render.add_argument(
+        "--duration", type=_parse_time, default=None, metavar="SEC|MM:SS|HH:MM:SS",
+        help="Alternative to --end: this much time after --start",
+    )
     p_render.add_argument("--fps", type=float, default=30.0)
     p_render.add_argument("--audio-cams", default="2,4")
     p_render.add_argument("--out-size", default="3840x2160", help="WxH, or 'native'")
@@ -499,15 +507,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_preview.add_argument("--align-start", choices=("latest", "earliest"), default="latest")
     p_preview.add_argument("--align-end", choices=("longest", "shortest"), default="longest")
     p_preview.add_argument(
-        "--start", default=None, metavar="SEC|MM:SS|CAM@SEC|CAM@MM:SS",
+        "--start", default=None, metavar="SEC|MM:SS|HH:MM:SS|CAM@...",
         help="Point on the common timeline, or a point in camera CAM's own raw "
              "footage (e.g. 2@5:24 -- 5:24 into camera 2), resolved via sync.yaml",
     )
     p_preview.add_argument(
-        "--end", default=None, metavar="SEC|MM:SS|CAM@SEC|CAM@MM:SS",
+        "--end", default=None, metavar="SEC|MM:SS|HH:MM:SS|CAM@...",
         help="Same syntax as --start",
     )
-    p_preview.add_argument("--duration", type=float, default=None)
+    p_preview.add_argument(
+        "--duration", type=_parse_time, default=None, metavar="SEC|MM:SS|HH:MM:SS",
+        help="Alternative to --end: this much time after --start",
+    )
     p_preview.add_argument("--fps", type=float, default=30.0)
     p_preview.add_argument("--audio-cams", default="2,4")
     p_preview.add_argument("--out-size", default="3840x2160", help="WxH, or 'native'")
@@ -519,7 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_preview.add_argument("--preview-seconds", type=float, default=60.0)
     p_preview.add_argument(
-        "--preview-at", action="append", metavar="middle|MM:SS|PCT",
+        "--preview-at", action="append", metavar="middle|SEC|MM:SS|HH:MM:SS|PCT%",
         help="Repeatable; default is 'middle' plus an automatic window at the first "
              "moment all four cameras are live",
     )

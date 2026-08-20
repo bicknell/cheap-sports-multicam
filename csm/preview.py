@@ -20,8 +20,12 @@ def _resolve_center(spec: str, duration: float) -> float:
         return duration / 2
     if spec.endswith("%"):
         return duration * float(spec[:-1]) / 100
-    if ":" in spec:
-        mm, _, ss = spec.partition(":")
+    parts = spec.split(":")
+    if len(parts) == 3:
+        hh, mm, ss = parts
+        return int(hh) * 3600 + int(mm) * 60 + float(ss)
+    if len(parts) == 2:
+        mm, ss = parts
         return int(mm) * 60 + float(ss)
     return float(spec)
 

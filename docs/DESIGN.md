@@ -1125,6 +1125,65 @@ choices:
   labelled "observations for specific hardware, may be stale." A new user with a different
   camera brand must not have to read around Akaso-specific advice to get started.
 
+### ffmpeg 9.0.1 audio-truncation bug (found 2026-08-30)
+
+The first two real full-game renders (2026-08-29, both local) both had audio silently stop
+partway through while video ran to completion normally -- `ffprobe` showed video the full
+length, audio truncated to ~968-976s in both, despite the two games having unrelated camera
+sync offsets. No error, no crash, no warning at any log level actually used (`-v error`).
+Wouldn't have been caught without deliberately checking each stream's own `duration`.
+
+**Root cause, established by live reproduction, not guesswork:**
+- Raw camera footage is fine -- concat-demuxed and fully decoded camera audio tracks
+  cleanly to their real ~75-90 min length in isolation.
+- Not the `join` filter, not `apad`, not a segment-boundary issue -- cross-correlating the
+  actual truncated output back onto each camera's raw timeline showed all 4 cameras
+  (not just the 2 used for audio) safely mid-segment at the cutoff point, nowhere near a
+  file boundary.
+- Not ffmpeg's muxing interleave queue -- `-max_muxing_queue_size 9999` made no
+  measurable difference on a real re-render.
+- It **is** a genuine memory leak: watched via `top` (not `ps`, whose plain RSS
+  undercounts this -- the leaked memory is cold/inactive and macOS's compressor grabs
+  it, so `top`'s footprint and `ps`'s RSS diverge sharply once the leak is underway).
+  Confirmed on the real `final-h265` profile at full settings (not a cheap/fast stand-in):
+  memory climbs *past* this rig's normal healthy ceiling (6-7GB) in a straight, steady
+  ~130-200MB/30s line with zero sign of plateauing, hitting 10GB+ within ~18 minutes.
+  A scaled-down repro (small resolution, `ultrafast`) reproduces the same shape faster,
+  useful for iterating, but the real profile leaks *worse*, not better -- not an
+  artifact of the cheap settings.
+- Isolated video decode+`xstack` alone (no audio branch at all): stable, no leak, even
+  over several minutes well past where other variants had shown a temporary lull before
+  resuming growth -- audio's presence in the graph is necessary to trigger it. `asetpts`
+  on the audio branch accelerates the onset but isn't strictly required -- a variant
+  without it still leaked, just later. So the underlying trigger is audio+video sharing
+  one filtergraph/process, not any single filter.
+- **ffmpeg version is the actual variable that matters.** Same exact command, same real
+  footage, same machine, three ffmpeg builds:
+  - **6.1.6** (predates the 7.0 "everything runs in parallel" CLI rewrite entirely):
+    clean, memory flat at the normal ~4.7GB ceiling for 4.5+ minutes past the transition
+    into full encoding, `top` showing 0B compressed the whole time.
+  - **7.1.5** (has the parallel rewrite, an early/stable point in it): also clean --
+    flat memory well past the false-plateau danger window seen in other tests, and
+    **run for real past the actual ~970s failure mark and stopped gracefully**: finished
+    file had video=964.97s, audio=964.77s -- matching, not truncated. Confirmed by ear,
+    not just `ffprobe`.
+  - **9.0.1** (current, `brew install ffmpeg`): leaks and truncates, every time, on this
+    exact same command.
+
+  Conclusion: a genuine regression somewhere between ffmpeg 7.1.5 and 9.0.1, not present
+  in either the pre-rewrite (6.x) or an early post-rewrite (7.1.x) architecture. 8.x is
+  untested -- narrowing further, or filing upstream, is future work.
+
+**Fix applied:** `csm/ffmpeg.py` now warns (not a hard block -- the exact bad range isn't
+nailed down, and a future ffmpeg release may fix it) whenever the detected version is
+≥8.0. This machine's Homebrew `ffmpeg`/`ffprobe` were switched to link `ffmpeg@7` (7.1.5)
+instead of the default `ffmpeg` formula (9.0.1, kept installed but unlinked -- `gifski`
+depends on it) so `PATH` resolves to the known-good version without needing
+`--ffmpeg`/`--ffprobe` overrides. The droplet's install script has no version pin at all
+(stock `apt` package, or a BtbN "latest" static build as fallback) and was **not**
+otherwise fixed here -- it's a real, live regression risk every time it runs; see the
+warning comment added at that fallback in `DigitialOcean/droplet-step2-install-software.sh`.
+
 ---
 
 ## 12. CLI

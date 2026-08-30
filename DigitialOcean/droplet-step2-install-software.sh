@@ -25,6 +25,14 @@ for codec in libx265 libsvtav1; do
     fi
 done
 
+# NOTE: neither path below pins a known-good ffmpeg version. csm/ffmpeg.py
+# now warns at runtime if the detected version is >=8.0 -- confirmed via
+# live reproduction that ffmpeg 9.0.1 silently truncates audio on long
+# renders (unbounded memory growth once encoding starts; video completes
+# normally, audio just stops -- easy to miss since nothing crashes). 6.1.6
+# and 7.1.5 are confirmed clean; watch for that warning in this step's
+# output and in step4's. The BtbN "latest" build below is a live regression
+# risk every time this script runs, not just a one-time gotcha.
 if [[ -n $missing_codec ]];
 then
     echo "Stock ffmpeg is missing:${missing_codec} -- falling back to a BtbN static build."

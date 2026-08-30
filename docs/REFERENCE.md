@@ -21,13 +21,22 @@ was.
 Needs Python 3.10+ and `ffmpeg`/`ffprobe` **7.0 or newer** on `PATH`.
 
 ```bash
-brew install ffmpeg          # macOS
+brew install ffmpeg@7        # macOS — see the warning below before using plain `ffmpeg`
 # or
 apt install ffmpeg           # Debian/Ubuntu — 25.04+ ships 7.x
 ```
 
 Check your version with `ffmpeg -version`. `csm` will refuse to run against
 anything older, with a message telling you what's missing.
+
+**ffmpeg 9.0.1 is confirmed broken**: it silently truncates the audio track on long
+renders (video finishes normally; a genuine unbounded memory leak once encoding starts —
+nothing crashes, so a broken render can look successful). 6.1.6 and 7.1.5 are confirmed
+clean; 8.x is untested. `csm` warns at runtime if it detects ≥8.0, but until that's
+retested, install `ffmpeg@7` specifically rather than the plain `ffmpeg` formula, and
+always check a finished render's actual audio `duration` (`ffprobe`), not just that the
+process exited cleanly. Full writeup: `docs/DESIGN.md` Sec 11 ("ffmpeg 9.0.1
+audio-truncation bug").
 
 `libx265` is required (it's the default encoder). `libvmaf`, `libsvtav1`, and
 `hevc_videotoolbox` are used when present and quietly skipped when not —

@@ -48,10 +48,10 @@ welcome.***
 
 ## Software
 
-[ffmpeg](https://ffmpeg.org) (7.0+) does the actual video processing; `csm`,
-the Python tool in this repository, figures out how each camera lines up in
-time and generates the right ffmpeg command for you. Quickstart, with every
-default left as-is:
+[ffmpeg](https://ffmpeg.org) (7.0+, but see the warning below) does the actual
+video processing; `csm`, the Python tool in this repository, figures out how
+each camera lines up in time and generates the right ffmpeg command for you.
+Quickstart, with every default left as-is:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -62,6 +62,17 @@ csm sync  GAMEDIR --write      # detect sync offsets, writes GAMEDIR/sync.yaml
 csm preview GAMEDIR            # optional: render a 60s sample first, watch it
 csm render GAMEDIR             # writes GAMEDIR/final_video.mp4
 ```
+
+**⚠️ ffmpeg 9.0.1 silently truncates audio on long renders** (confirmed via
+live reproduction 2026-08-30): unbounded memory growth once encoding starts,
+video completes normally, audio just stops partway through -- nothing
+crashes, so it's easy to ship a broken render without noticing. `csm` warns
+at runtime if it detects ffmpeg ≥8.0, but until 8.x is retested, **use ffmpeg
+7.1.x** (confirmed clean, e.g. `brew install ffmpeg@7`, pass
+`--ffmpeg`/`--ffprobe` at its keg-only binaries) and always check a finished
+render's actual audio duration, not just that the process exited 0. See
+`docs/DESIGN.md` Sec 11 ("ffmpeg 9.0.1 audio-truncation bug") for the full
+writeup.
 
 `GAMEDIR` is a directory with `camera1`/`camera2`/`camera3`/`camera4`
 subdirectories, each holding that camera's footage — see

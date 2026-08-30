@@ -11,9 +11,25 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 
 MIN_VERSION = (7, 0)
+
+# Confirmed via live reproduction (2026-08-30): ffmpeg 9.0.1 has a severe bug
+# where a filtergraph combining video (heavy: 4-camera decode/filter/encode)
+# and audio (light: concat/trim/join/aac) in one process leaks memory
+# unboundedly once encoding starts -- 5-10GB/hour, no ceiling, confirmed via
+# `top`'s compressed-memory-aware footprint (plain RSS undercounts it, since
+# most of the leaked memory is cold/inactive pages the OS compresses). The
+# audio track silently stops partway through a long render while video
+# completes normally -- not a crash, just missing sound from that point on.
+# ffmpeg 6.1.6 and 7.1.5 do NOT reproduce this (confirmed clean on the same
+# real footage, past the point where 9.0.1 always failed); 8.x is untested.
+# Warn rather than hard-block: the bad range isn't nailed down precisely
+# (8.x unknown) and a future ffmpeg release may fix it, which a hardcoded
+# upper bound would then incorrectly still reject.
+SUSPECT_VERSION = (8, 0)
 
 
 class FfmpegError(RuntimeError):
@@ -42,6 +58,19 @@ class Tool:
                 f"need >= {'.'.join(map(str, MIN_VERSION))}. "
                 f"Install a newer ffmpeg (e.g. `brew upgrade ffmpeg` or "
                 f"`apt install ffmpeg` from a current distro).",
+            )
+        if self.version >= SUSPECT_VERSION:
+            print(
+                f"warning: ffmpeg {'.'.join(map(str, self.version))} found -- 9.0.1 is "
+                f"confirmed to silently truncate audio on long renders (video completes "
+                f"normally; unbounded memory growth once encoding starts, see ffmpeg.py "
+                f"for how this was confirmed). 6.1.6 and 7.1.5 are confirmed clean; 8.x is "
+                f"untested. Until this is retested against your exact version, prefer "
+                f"ffmpeg 7.1.x -- e.g. `brew install ffmpeg@7` and pass "
+                f"--ffmpeg/--ffprobe pointing at its keg-only binaries. ALWAYS inspect a "
+                f"finished render's actual audio duration (not just that it completed) "
+                f"before trusting it.",
+                file=sys.stderr,
             )
 
 

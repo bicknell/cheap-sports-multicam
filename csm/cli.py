@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import time
 import warnings
 from fractions import Fraction
 from pathlib import Path
@@ -273,6 +274,29 @@ def _build_timeline(
         return None
 
 
+def _format_duration(seconds: float) -> str:
+    """3725.4 -> "1 hour 2 minutes and 5 seconds". Leading zero units are
+    dropped (a sub-hour render doesn't say "0 hours"), but minutes are kept
+    once hours are present even if 0, so long renders always show h/m/s."""
+    total = round(seconds)
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+
+    def unit(n: int, name: str) -> str:
+        return f"{n} {name}{'' if n == 1 else 's'}"
+
+    parts = []
+    if hours:
+        parts.append(unit(hours, "hour"))
+    if hours or minutes:
+        parts.append(unit(minutes, "minute"))
+    parts.append(unit(secs, "second"))
+
+    if len(parts) == 1:
+        return parts[0]
+    return " ".join(parts[:-1]) + " and " + parts[-1]
+
+
 def _load_metadata(gamedir: Path) -> dict[str, str]:
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -324,9 +348,12 @@ def cmd_render(args: argparse.Namespace) -> int:
             print(runner.dry_run(tool, job, work_dir))
         return 0
 
+    start = time.monotonic()
     for job in jobs:
         runner.run_job(tool, job, work_dir=args.work_dir)
-    print(f"wrote {output_path}")
+    elapsed = time.monotonic() - start
+    size_gb = output_path.stat().st_size / 1e9
+    print(f"wrote {output_path} ({size_gb:.2f}GB) in {_format_duration(elapsed)}.")
     return 0
 
 

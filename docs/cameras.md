@@ -9,6 +9,23 @@ cons, and known issues with various models to help you make an informed
 decision.  If you use a different camera, please provide feedback
 to be added to this page.
 
+## Akaso Brave 7
+
+Pro:
+   - Inexpensive, can usually be found on sale for around $170 or bundled with
+     an SD card for a few dollars more.
+   - Can sync wall clock time via the app.
+   - Waterproof rating should allow it to be used outdoors in light rain.
+
+Neutral:
+   - Default image is overexposed, but setting EV to -1.0 largely fixes the issue.
+   - Factory batteries seem to last about 2 hours.
+
+Con:
+   - Microphone faces to the left which often has it pointing in a non-useful direction.
+   - Microphone is low quality.
+   - Color balance sometimes appears a bit off in automatic mode.
+
 ## Akaso Brave 7 LE
 
 The Akaso Brave 7 LE is *NO LONGER RECOMMENDED*.

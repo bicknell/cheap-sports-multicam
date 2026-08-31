@@ -1,14 +1,22 @@
 # cheap-sports-multicam
 
+Software to process 4 cheap "GoPro" style cameras into a 2x2 tiled video of an
+entire soccer field for coaching and educational purposes.
+
+## History
+There are a number of commerically available "tracking cameras" to video a
+soccer game.  These solutions get a nice image of the action on the field,
+but are also quite expensive.
+
 I wanted a fast, cheap, easy way to get multiple camera angles of a soccer game
 with minimal post-processing effort.  My solution consists of three parts:
 
 1. Purchased components, documented in [Purchased](#Purchased).
 2. 3D printed components designed by me for this project and hosted on
    [Printables](https://www.printables.com) under [My Profile](https://www.printables.com/@LeoBicknell_3382814).
-3. The software in this repository to assist in post processinging.
+3. The software in this repository to assist in post processing.
 
-My Design Parameters:
+My Initial Design Parameters:
 
 - 4 cheap action cameras that can hopefully get two angles of most action.
 - Record in 1080P30 so the resulting video files are not too large.
@@ -16,16 +24,16 @@ My Design Parameters:
 - Programatic post-processing.
 - Get the cameras up in the air for a better view.
 
-***This software should be considered BETA quality at this time.  This is the first season
-I have used it, and frequent improvements are being tested.  Feedback from others is
-welcome.***
+***This software should be considered BETA quality at this time.  This is
+the second season I have used it and it received a major rewrite from the
+previous season.  Feedback from others is welcome.***
 
 ## Bill of Materials
 
 ### Purchased
 
 - 4 Action Cameras.  I am currently using 
-  [Akaso Brave 7 LE](https://www.akasotech.com/support/Brave-7-LE) cameras.
+  [Akaso Brave 7](https://www.akasotech.com/brave-7) cameras.
   **Please read** [docs/cameras.md](docs/cameras.md) before purchasing cameras.
   - The parts are built around a "GoPro" style mount, so pretty much any action cam
     should work.
@@ -48,8 +56,13 @@ welcome.***
 
 ## Software
 
+The software should work on any modern unix-like operating system.
+
 [ffmpeg](https://ffmpeg.org) (7.0+, but see the warning below) does the actual
-video processing; `csm`, the Python tool in this repository, figures out how
+video processing.  Please install it via the correct mechanism for your 
+operating system.
+
+This repository builds `csm`, a Python tool, which figures out how
 each camera lines up in time and generates the right ffmpeg command for you.
 Quickstart, with every default left as-is:
 
@@ -57,10 +70,12 @@ Quickstart, with every default left as-is:
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-csm probe GAMEDIR              # sanity-check the footage
-csm sync  GAMEDIR --write      # detect sync offsets, writes GAMEDIR/sync.yaml
-csm preview GAMEDIR            # optional: render a 60s sample first, watch it
-csm render GAMEDIR             # writes GAMEDIR/final_video.mp4
+export GAMEDIR=/Path/To/Game/Directory
+
+csm probe   "$GAMEDIR"              # sanity-check the footage
+csm sync    "$GAMEDIR" --write      # detect sync offsets, writes GAMEDIR/sync.yaml
+csm preview "$GAMEDIR"              # OPTIONAL: render a 60s sample first, watch it
+csm render  "$GAMEDIR"              # writes GAMEDIR/final_video.mp4
 ```
 
 **⚠️ ffmpeg 9.0.1 silently truncates audio on long renders** (confirmed via
@@ -103,13 +118,42 @@ anymore.
 1. **Optional:** To add metadata, create a file called `GAMEDIR/metadata.yaml`.  Each
    line should be a string to string mapping of a value in the
    [Public Metadata API](https://ffmpeg.org/doxygen/7.0/group__metadata__api.html)
+
+   A warning will be printed if you do not create a metadata.yaml file to help prevent
+   forgetting one.  It can be ignored if you really intend to have no metadata.
+
 1. Run the tool, per the [Software](#software) quickstart above:
 
    ```bash
-   csm probe   GAMEDIR
-   csm sync    GAMEDIR --write
-   csm preview GAMEDIR              # optional but recommended: check sync before the full render
-   csm render  GAMEDIR
+   export GAMEDIR=/Path/To/Game/Directory
+   
+   vi $GAMEDIR/metadata.yaml
+   
+   # Populate metadata.yaml with any ffmpeg metadata fields.
+   
+   open $GAMEDIR/camera1/*.mp4
+   
+   # View the first camera in your favorite tool and generate the offset at which
+   # to start and the duration of the final video.
+   export TIMES=(--start 1@06:37 --duration 65:00)
+   
+   csm probe   "$GAMEDIR" --frame --frame-at 90 # Write out frames from each camera
+   open "$GAMEDIR/.csm/frames/*"                # View them to determine cutoff lines
+   
+   # The video encoding will greately degrade the quality of anything above
+   # these pixel lines from the BOTTOM of the frame to reduce file size.  I typically
+   # set these to most of the sky above the highest point I want to be clear.
+   
+   export FIELD_CUTOFF=(--field-cutoff 1=930 --field-cutoff 2=930 --field-cutoff 3=930 --field-cutoff 4=980)
+   
+   csm sync    "$GAMEDIR" --write               # Synchronize the video based on audio
+   
+   csm preview "$GAMEDIR" "${TIMES[@]}" "${FIELD_CUTOFF[@]}" \
+    --preview-seconds 30 --preview-at 0% --preview-at middle --preview-at 100%
+   
+   open "$GAMEDIR/.csm/preview/*"               # Review the previews for QA
+    
+   csm render "$GAMEDIR" "${TIMES[@]}" "${FIELD_CUTOFF[@]}"
    ```
 
    The final video ends up at `GAMEDIR/final_video.mp4`. See

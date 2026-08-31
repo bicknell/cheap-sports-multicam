@@ -73,6 +73,10 @@ def load_metadata(game_dir: Path) -> dict[str, str]:
     a single warning instead (Sec 10.1)."""
     path = game_dir / "metadata.yaml"
     if not path.exists():
+        warnings.warn(
+            f"{path} not found -- rendering with no video metadata (title, "
+            f"description, etc). Create it if that's not intentional."
+        )
         return {}
     with open(path) as f:
         raw = yaml.safe_load(f) or {}
